@@ -31,6 +31,44 @@ A modern, production-grade enterprise CRM and executive business operations suit
 
 ---
 
+## 🌐 1-Click Free Live Deployment
+
+Deploy this project completely **free** with zero server costs:
+
+### Option 1: Vercel (Recommended - Fastest & 100% Free)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fozostack1%2FOzostack-CRM-Ai-Studio)
+
+1. Click the **Deploy with Vercel** button above (or go to [vercel.com/new](https://vercel.com/new)).
+2. Import `ozostack1/Ozostack-CRM-Ai-Studio`.
+3. Click **Deploy**. Vercel will build and assign you a free `https://your-app.vercel.app` live URL with free SSL and automated CI/CD.
+
+### Option 2: Netlify (100% Free)
+[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/ozostack1/Ozostack-CRM-Ai-Studio)
+
+1. Click the **Deploy to Netlify** button above.
+2. Connect your GitHub account and select this repository.
+3. Netlify automatically detects `netlify.toml` and gives you a free `https://your-app.netlify.app` live domain.
+
+### Option 3: GitHub Pages (Directly inside GitHub)
+1. In your GitHub repository, navigate to **Settings** -> **Pages**.
+2. Under **Build and deployment** -> **Source**, select **GitHub Actions**.
+3. Every push to `main` automatically deploys live to `https://ozostack1.github.io/Ozostack-CRM-Ai-Studio/`.
+
+---
+
+## 💾 Server & Database Architecture (100% Free)
+
+- **Default Built-in Architecture ($0/month)**:
+  The CRM is engineered as a zero-latency client-side enterprise SPA with persistent browser database. All leads, deals, invoices, team members, time tracking, calendar events, settings, and personal notes persist directly in the browser with **zero backend server costs** and **zero database maintenance**.
+
+- **Multi-Device / Multi-User Cloud Database Options (Free Tiers)**:
+  If you want cloud database synchronization across multiple computers:
+  - **Supabase (PostgreSQL)**: Free tier includes 500 MB database, Auth, and instant REST API.
+  - **Neon.tech**: Free serverless PostgreSQL (0.5 GB).
+  - **Firebase Firestore**: Free tier (1 GB, 50,000 reads/day).
+
+---
+
 ## 🏁 Getting Started
 
 ### Prerequisites
@@ -68,3 +106,4 @@ npm run preview
 
 ## 📄 License
 Private & Proprietary - OzoStack Technologies Inc.
+
