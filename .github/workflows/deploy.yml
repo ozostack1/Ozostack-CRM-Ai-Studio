@@ -31,10 +31,12 @@ jobs:
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm ci
+        run: npm install
 
       - name: Build Production Bundle
         run: npm run build
+        env:
+          BASE_PATH: './'
 
       - name: Setup GitHub Pages
         uses: actions/configure-pages@v4
@@ -47,3 +49,4 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
