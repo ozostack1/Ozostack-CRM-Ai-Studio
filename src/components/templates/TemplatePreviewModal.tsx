@@ -38,9 +38,9 @@ export const TemplatePreviewModal: React.FC<TemplatePreviewModalProps> = ({
   const leadsList = useMemo(() => {
     try {
       const raw = localStorage.getItem('ozostack_leads_v2');
-      if (raw) {
+      if (raw !== null) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch {
       /* fallback */

@@ -70,9 +70,9 @@ export const InvoicesView: React.FC = () => {
   const [invoices, setInvoices] = useState<Invoice[]>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_INVOICES_KEY);
-      if (stored) {
+      if (stored !== null) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {
       console.error(e);
@@ -84,9 +84,9 @@ export const InvoicesView: React.FC = () => {
   const [proposals, setProposals] = useState<ProposalDocument[]>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_PROPOSALS_KEY);
-      if (stored) {
+      if (stored !== null) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {
       console.error(e);
@@ -98,9 +98,9 @@ export const InvoicesView: React.FC = () => {
   const [quotations, setQuotations] = useState<QuotationDocument[]>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_QUOTATIONS_KEY);
-      if (stored) {
+      if (stored !== null) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {
       console.error(e);
@@ -112,9 +112,9 @@ export const InvoicesView: React.FC = () => {
   const [contracts, setContracts] = useState<ContractDocument[]>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_CONTRACTS_KEY);
-      if (stored) {
+      if (stored !== null) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {
       console.error(e);
@@ -179,13 +179,37 @@ export const InvoicesView: React.FC = () => {
   // Delete handlers
   const handleDeleteDocument = (id: string) => {
     if (activeTab === 'invoices') {
-      setInvoices((prev) => prev.filter((it) => it.id !== id));
+      setInvoices((prev) => {
+        const next = prev.filter((it) => it.id !== id);
+        try {
+          localStorage.setItem(STORAGE_INVOICES_KEY, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
     } else if (activeTab === 'proposals') {
-      setProposals((prev) => prev.filter((it) => it.id !== id));
+      setProposals((prev) => {
+        const next = prev.filter((it) => it.id !== id);
+        try {
+          localStorage.setItem(STORAGE_PROPOSALS_KEY, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
     } else if (activeTab === 'quotations') {
-      setQuotations((prev) => prev.filter((it) => it.id !== id));
+      setQuotations((prev) => {
+        const next = prev.filter((it) => it.id !== id);
+        try {
+          localStorage.setItem(STORAGE_QUOTATIONS_KEY, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
     } else if (activeTab === 'contracts') {
-      setContracts((prev) => prev.filter((it) => it.id !== id));
+      setContracts((prev) => {
+        const next = prev.filter((it) => it.id !== id);
+        try {
+          localStorage.setItem(STORAGE_CONTRACTS_KEY, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
     }
     setDeletingId(null);
   };

@@ -60,9 +60,9 @@ export const ExpensesView: React.FC = () => {
   const [expenses, setExpenses] = useState<ExpenseItem[]>(() => {
     try {
       const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (stored) {
+      if (stored !== null) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {
       console.error('Failed to parse stored expenses', e);
@@ -139,7 +139,13 @@ export const ExpensesView: React.FC = () => {
 
   // Delete
   const handleDeleteExpense = (id: string) => {
-    setExpenses((prev) => prev.filter((it) => it.id !== id));
+    setExpenses((prev) => {
+      const next = prev.filter((it) => it.id !== id);
+      try {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
     setIsDetailsDrawerOpen(false);
     setSelectedExpense(null);
   };

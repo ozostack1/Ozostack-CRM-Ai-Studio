@@ -61,9 +61,9 @@ export const TasksView: React.FC = () => {
   const [tasks, setTasks] = useState<TaskItem[]>(() => {
     try {
       const saved = localStorage.getItem('ozostack_tasks_v2');
-      if (saved) {
+      if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch {
       /* fallback */
@@ -83,9 +83,9 @@ export const TasksView: React.FC = () => {
     const syncTasks = () => {
       try {
         const saved = localStorage.getItem('ozostack_tasks_v2');
-        if (saved) {
+        if (saved !== null) {
           const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) setTasks(parsed);
+          if (Array.isArray(parsed)) setTasks(parsed);
         }
       } catch {
         /* ignore */
@@ -324,7 +324,13 @@ export const TasksView: React.FC = () => {
   };
 
   const handleDeleteTask = (taskId: string, taskTitle: string) => {
-    setTasks((prev) => prev.filter((t) => t.id !== taskId));
+    setTasks((prev) => {
+      const next = prev.filter((t) => t.id !== taskId);
+      try {
+        localStorage.setItem('ozostack_tasks_v2', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
     showToast(`Task "${taskTitle}" deleted.`);
     if (selectedDrawerTask?.id === taskId) {
       setIsDrawerOpen(false);

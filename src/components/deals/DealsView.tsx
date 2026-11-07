@@ -77,9 +77,9 @@ export const DealsView: React.FC = () => {
   const reloadDeals = () => {
     try {
       const saved = localStorage.getItem('ozostack_deals_v2');
-      if (saved) {
+      if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch {
       /* fallback */
@@ -244,7 +244,13 @@ export const DealsView: React.FC = () => {
   };
 
   const handleDeleteDeal = (dealId: string) => {
-    setDeals((prev) => prev.filter((d) => d.id !== dealId));
+    setDeals((prev) => {
+      const next = prev.filter((d) => d.id !== dealId);
+      try {
+        localStorage.setItem('ozostack_deals_v2', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
     setSelectedDealIds((prev) => prev.filter((id) => id !== dealId));
     showToast('Deal opportunity deleted.');
   };

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   ArrowLeft,
   Plus,
@@ -42,6 +42,31 @@ type CompanySortOption =
   | 'name-asc'
   | 'deals-desc';
 
+const STORAGE_COMPANIES_KEY = 'ozostack_companies_v1';
+const STORAGE_CONTACTS_KEY = 'ozostack_contacts_v1';
+
+const loadCompaniesFromStorage = (): Company[] => {
+  try {
+    const saved = localStorage.getItem(STORAGE_COMPANIES_KEY);
+    if (saved !== null) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return INITIAL_COMPANIES;
+};
+
+const loadContactsFromStorage = (): Contact[] => {
+  try {
+    const saved = localStorage.getItem(STORAGE_CONTACTS_KEY);
+    if (saved !== null) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return INITIAL_CONTACTS;
+};
+
 export const CompaniesView: React.FC = () => {
   const { theme, setActiveNav } = useTheme();
   const { scopeFilter } = useAuth();
@@ -49,13 +74,38 @@ export const CompaniesView: React.FC = () => {
   const isLight = theme === 'white-sky';
 
   // Companies, activities, & contacts state
-  const [companies, setCompanies] = useState<Company[]>(INITIAL_COMPANIES);
+  const [companies, setCompanies] = useState<Company[]>(loadCompaniesFromStorage);
   const visibleCompanies = useMemo(
     () => scopeFilter(companies, (c) => ({ owner: c.accountOwner })),
     [companies, scopeFilter]
   );
   const [activities, setActivities] = useState<CompanyActivity[]>(INITIAL_COMPANY_ACTIVITIES);
-  const [contacts, setContacts] = useState<Contact[]>(INITIAL_CONTACTS);
+  const [contacts, setContacts] = useState<Contact[]>(loadContactsFromStorage);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_COMPANIES_KEY, JSON.stringify(companies));
+    } catch {}
+  }, [companies]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_CONTACTS_KEY, JSON.stringify(contacts));
+    } catch {}
+  }, [contacts]);
+
+  useEffect(() => {
+    const onStorage = () => {
+      setCompanies(loadCompaniesFromStorage());
+      setContacts(loadContactsFromStorage());
+    };
+    window.addEventListener('ozostack-contacts-changed', onStorage);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('ozostack-contacts-changed', onStorage);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
 
   // View Mode: 'grid' | 'table'
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
@@ -279,16 +329,27 @@ export const CompaniesView: React.FC = () => {
 
   const handleDeleteContact = (contactId: string) => {
     const target = contacts.find((c) => c.id === contactId);
-    setContacts((prev) => prev.filter((c) => c.id !== contactId));
+    setContacts((prev) => {
+      const next = prev.filter((c) => c.id !== contactId);
+      try {
+        localStorage.setItem(STORAGE_CONTACTS_KEY, JSON.stringify(next));
+        window.dispatchEvent(new Event('ozostack-contacts-changed'));
+      } catch {}
+      return next;
+    });
 
     if (selectedDrawerCompany) {
-      setCompanies((prev) =>
-        prev.map((comp) =>
+      setCompanies((prev) => {
+        const next = prev.map((comp) =>
           comp.id === selectedDrawerCompany.id
             ? { ...comp, contactsCount: Math.max(0, comp.contactsCount - 1) }
             : comp
-        )
-      );
+        );
+        try {
+          localStorage.setItem(STORAGE_COMPANIES_KEY, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
       setSelectedDrawerCompany((prev) =>
         prev ? { ...prev, contactsCount: Math.max(0, prev.contactsCount - 1) } : null
       );
@@ -298,16 +359,27 @@ export const CompaniesView: React.FC = () => {
   };
 
   const handleDeleteMultipleContacts = (contactIds: string[]) => {
-    setContacts((prev) => prev.filter((c) => !contactIds.includes(c.id)));
+    setContacts((prev) => {
+      const next = prev.filter((c) => !contactIds.includes(c.id));
+      try {
+        localStorage.setItem(STORAGE_CONTACTS_KEY, JSON.stringify(next));
+        window.dispatchEvent(new Event('ozostack-contacts-changed'));
+      } catch {}
+      return next;
+    });
 
     if (selectedDrawerCompany) {
-      setCompanies((prev) =>
-        prev.map((comp) =>
+      setCompanies((prev) => {
+        const next = prev.map((comp) =>
           comp.id === selectedDrawerCompany.id
             ? { ...comp, contactsCount: Math.max(0, comp.contactsCount - contactIds.length) }
             : comp
-        )
-      );
+        );
+        try {
+          localStorage.setItem(STORAGE_COMPANIES_KEY, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
       setSelectedDrawerCompany((prev) =>
         prev ? { ...prev, contactsCount: Math.max(0, prev.contactsCount - contactIds.length) } : null
       );
@@ -317,7 +389,13 @@ export const CompaniesView: React.FC = () => {
   };
 
   const handleDeleteCompany = (companyId: string, companyName: string) => {
-    setCompanies((prev) => prev.filter((c) => c.id !== companyId));
+    setCompanies((prev) => {
+      const next = prev.filter((c) => c.id !== companyId);
+      try {
+        localStorage.setItem(STORAGE_COMPANIES_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
     showToast(`Company "${companyName}" removed.`);
     if (selectedDrawerCompany?.id === companyId) {
       setIsDrawerOpen(false);

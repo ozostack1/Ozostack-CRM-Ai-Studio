@@ -74,9 +74,9 @@ export const PaymentsView: React.FC = () => {
   const [payments, setPayments] = useState<PaymentTransaction[]>(() => {
     try {
       const stored = localStorage.getItem(LOCAL_STORAGE_PAYMENTS);
-      if (stored) {
+      if (stored !== null) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {
       console.error('Failed to parse stored payments', e);
@@ -88,9 +88,9 @@ export const PaymentsView: React.FC = () => {
   const [gateways, setGateways] = useState<PaymentGateway[]>(() => {
     try {
       const stored = localStorage.getItem(LOCAL_STORAGE_GATEWAYS);
-      if (stored) {
+      if (stored !== null) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {
       console.error('Failed to parse stored gateways', e);
@@ -102,9 +102,9 @@ export const PaymentsView: React.FC = () => {
   const [payouts, setPayouts] = useState<BankPayout[]>(() => {
     try {
       const stored = localStorage.getItem(LOCAL_STORAGE_PAYOUTS);
-      if (stored) {
+      if (stored !== null) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {
       console.error('Failed to parse stored payouts', e);
@@ -116,9 +116,9 @@ export const PaymentsView: React.FC = () => {
   const [disputes, setDisputes] = useState<PaymentDispute[]>(() => {
     try {
       const stored = localStorage.getItem(LOCAL_STORAGE_DISPUTES);
-      if (stored) {
+      if (stored !== null) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {
       console.error('Failed to parse stored disputes', e);
@@ -235,7 +235,13 @@ export const PaymentsView: React.FC = () => {
 
   // Delete
   const handleDeletePayment = (id: string) => {
-    setPayments((prev) => prev.filter((it) => it.id !== id));
+    setPayments((prev) => {
+      const next = prev.filter((it) => it.id !== id);
+      try {
+        localStorage.setItem(LOCAL_STORAGE_PAYMENTS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
     setIsDetailsDrawerOpen(false);
     setSelectedPayment(null);
     showToast('Payment record removed');

@@ -51,9 +51,9 @@ export const DocumentsView: React.FC = () => {
   const [documents, setDocuments] = useState<DocumentItem[]>(() => {
     try {
       const saved = localStorage.getItem('ozostack_documents_v2');
-      if (saved) {
+      if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch {
       /* fallback */
@@ -73,9 +73,9 @@ export const DocumentsView: React.FC = () => {
     const syncDocs = () => {
       try {
         const saved = localStorage.getItem('ozostack_documents_v2');
-        if (saved) {
+        if (saved !== null) {
           const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) setDocuments(parsed);
+          if (Array.isArray(parsed)) setDocuments(parsed);
         }
       } catch {
         /* ignore */
@@ -235,7 +235,13 @@ export const DocumentsView: React.FC = () => {
 
   const handleDeleteDoc = (docId: string, docName: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    setDocuments((prev) => prev.filter((d) => d.id !== docId));
+    setDocuments((prev) => {
+      const next = prev.filter((d) => d.id !== docId);
+      try {
+        localStorage.setItem('ozostack_documents_v2', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
     setSelectedDocIds((prev) => {
       const next = new Set(prev);
       next.delete(docId);

@@ -72,9 +72,9 @@ export const ProjectsView: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>(() => {
     try {
       const saved = localStorage.getItem('ozostack_projects');
-      if (saved) {
+      if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
           return parsed.map((p) => {
             if (!p || typeof p !== 'object') return p;
             const initP = INITIAL_PROJECTS.find((ip) => ip.id === p.id);
@@ -106,9 +106,9 @@ export const ProjectsView: React.FC = () => {
     const syncProjects = () => {
       try {
         const saved = localStorage.getItem('ozostack_projects');
-        if (saved) {
+        if (saved !== null) {
           const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) setProjects(parsed);
+          if (Array.isArray(parsed)) setProjects(parsed);
         }
       } catch {
         /* ignore */

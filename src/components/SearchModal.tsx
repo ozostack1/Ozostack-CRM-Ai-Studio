@@ -50,23 +50,56 @@ export const SearchModal: React.FC<SearchModalProps> = ({ isOpen, onClose }) => 
         .slice(0, 5)
     : [];
 
-  const leads = INITIAL_LEADS.filter(
+  const storedLeads = (() => {
+    try {
+      const raw = localStorage.getItem('ozostack_leads_v2');
+      if (raw !== null) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return INITIAL_LEADS;
+  })();
+
+  const leads = storedLeads.filter(
     (l) =>
       l.name.toLowerCase().includes(query.toLowerCase()) ||
       l.company.toLowerCase().includes(query.toLowerCase()) ||
       l.email.toLowerCase().includes(query.toLowerCase())
   );
 
-  const deals = RECENT_DEALS.filter(
-    (d) =>
-      d.dealName.toLowerCase().includes(query.toLowerCase()) ||
-      d.company.toLowerCase().includes(query.toLowerCase())
+  const storedDeals = (() => {
+    try {
+      const raw = localStorage.getItem('ozostack_deals_v2');
+      if (raw !== null) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return null;
+  })();
+
+  const deals = (storedDeals || RECENT_DEALS).filter(
+    (d: any) =>
+      (d.dealName || d.project || '').toLowerCase().includes(query.toLowerCase()) ||
+      (d.company || d.client || '').toLowerCase().includes(query.toLowerCase())
   );
 
-  const tasks = OVERDUE_TASKS.filter(
-    (t) =>
-      t.taskName.toLowerCase().includes(query.toLowerCase()) ||
-      t.project.toLowerCase().includes(query.toLowerCase())
+  const storedTasks = (() => {
+    try {
+      const raw = localStorage.getItem('ozostack_tasks_v2');
+      if (raw !== null) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return null;
+  })();
+
+  const tasks = (storedTasks || OVERDUE_TASKS).filter(
+    (t: any) =>
+      (t.taskName || t.title || '').toLowerCase().includes(query.toLowerCase()) ||
+      (t.project || '').toLowerCase().includes(query.toLowerCase())
   );
 
   const invoices = INVOICES.filter(

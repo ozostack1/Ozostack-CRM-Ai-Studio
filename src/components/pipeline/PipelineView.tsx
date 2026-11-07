@@ -66,9 +66,9 @@ export const PipelineView: React.FC = () => {
   const reloadDeals = () => {
     try {
       const saved = localStorage.getItem('ozostack_deals_v2');
-      if (saved) {
+      if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch {
       /* fallback */

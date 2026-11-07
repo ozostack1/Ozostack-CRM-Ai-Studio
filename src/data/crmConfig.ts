@@ -254,9 +254,9 @@ export const submitPublicLeadForm = (
   let existingLeads: Lead[] = INITIAL_LEADS;
   try {
     const saved = localStorage.getItem('ozostack_leads_v2');
-    if (saved) {
+    if (saved !== null) {
       const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed) && parsed.length > 0) {
+      if (Array.isArray(parsed)) {
         existingLeads = parsed;
       }
     }

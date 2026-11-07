@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   ArrowLeft,
   Plus,
@@ -50,6 +50,20 @@ type SortOption =
   | 'company-asc'
   | 'recent';
 
+const STORAGE_CONTACTS_KEY = 'ozostack_contacts_v1';
+const loadContactsFromStorage = (): Contact[] => {
+  try {
+    const saved = localStorage.getItem(STORAGE_CONTACTS_KEY);
+    if (saved !== null) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {
+    /* fallback */
+  }
+  return INITIAL_CONTACTS;
+};
+
 export const ContactsView: React.FC = () => {
   const { theme, setActiveNav } = useTheme();
   const { scopeFilter } = useAuth();
@@ -57,7 +71,23 @@ export const ContactsView: React.FC = () => {
   const isLight = theme === 'white-sky';
 
   // Contacts state
-  const [contacts, setContacts] = useState<Contact[]>(INITIAL_CONTACTS);
+  const [contacts, setContacts] = useState<Contact[]>(loadContactsFromStorage);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_CONTACTS_KEY, JSON.stringify(contacts));
+    } catch {}
+  }, [contacts]);
+
+  useEffect(() => {
+    const onStorage = () => setContacts(loadContactsFromStorage());
+    window.addEventListener('ozostack-contacts-changed', onStorage);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('ozostack-contacts-changed', onStorage);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
   const visibleContacts = useMemo(
     () => scopeFilter(contacts, (c) => ({ owner: c.dealOwner })),
     [contacts, scopeFilter]
@@ -260,21 +290,37 @@ export const ContactsView: React.FC = () => {
 
   // Save / Update contact
   const handleSaveContact = (saved: Contact) => {
+    setContacts((prev) => {
+      const next = contactToEdit
+        ? prev.map((c) => (c.id === saved.id ? saved : c))
+        : [saved, ...prev];
+      try {
+        localStorage.setItem(STORAGE_CONTACTS_KEY, JSON.stringify(next));
+        window.dispatchEvent(new Event('ozostack-contacts-changed'));
+      } catch {}
+      return next;
+    });
+
     if (contactToEdit) {
-      setContacts((prev) => prev.map((c) => (c.id === saved.id ? saved : c)));
       if (selectedDrawerContact?.id === saved.id) {
         setSelectedDrawerContact(saved);
       }
       showToast(`Contact "${saved.name}" updated successfully.`);
     } else {
-      setContacts((prev) => [saved, ...prev]);
       showToast(`New contact "${saved.name}" added to directory.`);
     }
   };
 
   // Update contact directly from Drawer
   const handleUpdateContactFromDrawer = (updated: Contact) => {
-    setContacts((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+    setContacts((prev) => {
+      const next = prev.map((c) => (c.id === updated.id ? updated : c));
+      try {
+        localStorage.setItem(STORAGE_CONTACTS_KEY, JSON.stringify(next));
+        window.dispatchEvent(new Event('ozostack-contacts-changed'));
+      } catch {}
+      return next;
+    });
     setSelectedDrawerContact(updated);
   };
 
@@ -282,7 +328,14 @@ export const ContactsView: React.FC = () => {
   const handleDeleteContact = (id: string, name: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if (window.confirm(`Are you sure you want to remove "${name}" from contacts?`)) {
-      setContacts((prev) => prev.filter((c) => c.id !== id));
+      setContacts((prev) => {
+        const next = prev.filter((c) => c.id !== id);
+        try {
+          localStorage.setItem(STORAGE_CONTACTS_KEY, JSON.stringify(next));
+          window.dispatchEvent(new Event('ozostack-contacts-changed'));
+        } catch {}
+        return next;
+      });
       setSelectedContactIds((prev) => prev.filter((item) => item !== id));
       if (selectedDrawerContact?.id === id) {
         setIsDrawerOpen(false);
@@ -298,7 +351,14 @@ export const ContactsView: React.FC = () => {
         `Are you sure you want to delete ${selectedContactIds.length} selected contacts?`
       )
     ) {
-      setContacts((prev) => prev.filter((c) => !selectedContactIds.includes(c.id)));
+      setContacts((prev) => {
+        const next = prev.filter((c) => !selectedContactIds.includes(c.id));
+        try {
+          localStorage.setItem(STORAGE_CONTACTS_KEY, JSON.stringify(next));
+          window.dispatchEvent(new Event('ozostack-contacts-changed'));
+        } catch {}
+        return next;
+      });
       showToast(`${selectedContactIds.length} contacts deleted.`);
       setSelectedContactIds([]);
     }

@@ -81,9 +81,9 @@ export const LeadsView: React.FC = () => {
   const reloadLeadsFromStorage = () => {
     try {
       const saved = localStorage.getItem('ozostack_leads_v2');
-      if (saved) {
+      if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch {
       /* fallback */
@@ -307,7 +307,13 @@ export const LeadsView: React.FC = () => {
   };
 
   const handleDeleteLead = (leadId: string) => {
-    setLeads((prev) => prev.filter((l) => l.id !== leadId));
+    setLeads((prev) => {
+      const next = prev.filter((l) => l.id !== leadId);
+      try {
+        localStorage.setItem('ozostack_leads_v2', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
     setSelectedLeadIds((prev) => prev.filter((id) => id !== leadId));
     if (activeDrawerLead?.id === leadId) {
       setIsDrawerOpen(false);
@@ -458,7 +464,13 @@ export const LeadsView: React.FC = () => {
 
   const handleBulkDelete = () => {
     if (confirm(`Are you sure you want to delete ${selectedLeadIds.length} leads?`)) {
-      setLeads((prev) => prev.filter((l) => !selectedLeadIds.includes(l.id)));
+      setLeads((prev) => {
+        const next = prev.filter((l) => !selectedLeadIds.includes(l.id));
+        try {
+          localStorage.setItem('ozostack_leads_v2', JSON.stringify(next));
+        } catch {}
+        return next;
+      });
       setSelectedLeadIds([]);
     }
   };

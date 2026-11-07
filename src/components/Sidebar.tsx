@@ -174,9 +174,9 @@ export const Sidebar: React.FC = () => {
     const readLS = <T,>(key: string, fallback: T[]): T[] => {
       try {
         const raw = localStorage.getItem(key);
-        if (raw) {
+        if (raw !== null) {
           const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          if (Array.isArray(parsed)) return parsed;
         }
       } catch {
         /* fallback */

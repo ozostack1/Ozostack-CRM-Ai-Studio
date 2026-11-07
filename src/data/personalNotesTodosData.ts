@@ -212,9 +212,9 @@ Check Web Audio API synthesizer for clean notification chimes.`,
 export function loadAllTodos(): PersonalTodo[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_TODOS);
-    if (raw) {
+    if (raw !== null) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed)) return parsed;
     }
   } catch {
     /* fallback */
@@ -234,9 +234,9 @@ export function saveAllTodos(todos: PersonalTodo[]): void {
 export function loadAllNotes(): PersonalNote[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_NOTES);
-    if (raw) {
+    if (raw !== null) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed)) return parsed;
     }
   } catch {
     /* fallback */

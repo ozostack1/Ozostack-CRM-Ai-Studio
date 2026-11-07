@@ -241,15 +241,14 @@ export const sanitizeTemplate = (raw: any): OutreachTemplate => {
 export const loadTemplates = (): OutreachTemplate[] => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
+    if (raw === null) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_TEMPLATES));
       return INITIAL_TEMPLATES;
     }
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) {
+    if (Array.isArray(parsed)) {
       return parsed.map(sanitizeTemplate);
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_TEMPLATES));
     return INITIAL_TEMPLATES;
   } catch (err) {
     console.error('Failed to load templates from localStorage:', err);

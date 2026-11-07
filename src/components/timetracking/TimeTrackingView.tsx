@@ -62,9 +62,9 @@ export const TimeTrackingView: React.FC = () => {
   const [entries, setEntries] = useState<TimeEntry[]>(() => {
     try {
       const saved = localStorage.getItem('ozostack_time_entries_v1');
-      if (saved) {
+      if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch {
       /* fallback */
@@ -84,9 +84,9 @@ export const TimeTrackingView: React.FC = () => {
     const syncEntries = () => {
       try {
         const saved = localStorage.getItem('ozostack_time_entries_v1');
-        if (saved) {
+        if (saved !== null) {
           const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) setEntries(parsed);
+          if (Array.isArray(parsed)) setEntries(parsed);
         }
       } catch {
         /* ignore */
@@ -300,7 +300,13 @@ export const TimeTrackingView: React.FC = () => {
   };
 
   const handleDeleteEntry = (id: string, taskTitle: string) => {
-    setEntries((prev) => prev.filter((e) => e.id !== id));
+    setEntries((prev) => {
+      const next = prev.filter((e) => e.id !== id);
+      try {
+        localStorage.setItem('ozostack_time_entries_v1', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
     showToast(`Deleted time entry for "${taskTitle}".`);
   };
 

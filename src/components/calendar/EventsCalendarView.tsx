@@ -96,9 +96,9 @@ export const EventsCalendarView: React.FC = () => {
   const [events, setEvents] = useState<CalendarEvent[]>(() => {
     try {
       const saved = localStorage.getItem('ozostack_calendar_events_v3');
-      if (saved) {
+      if (saved !== null) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch {
       /* fallback */
@@ -118,9 +118,9 @@ export const EventsCalendarView: React.FC = () => {
     const syncEvents = () => {
       try {
         const saved = localStorage.getItem('ozostack_calendar_events_v3');
-        if (saved) {
+        if (saved !== null) {
           const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) setEvents(parsed);
+          if (Array.isArray(parsed)) setEvents(parsed);
         }
       } catch {
         /* ignore */
@@ -438,7 +438,13 @@ export const EventsCalendarView: React.FC = () => {
   };
 
   const handleDeleteEvent = (eventId: string, eventTitle: string) => {
-    setEvents((prev) => prev.filter((e) => e.id !== eventId));
+    setEvents((prev) => {
+      const next = prev.filter((e) => e.id !== eventId);
+      try {
+        localStorage.setItem('ozostack_calendar_events_v3', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
     showToast(`Deleted "${eventTitle}".`);
     if (selectedDrawerEvent?.id === eventId) {
       setIsDrawerOpen(false);

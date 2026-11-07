@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   ArrowLeft,
   Plus,
@@ -46,13 +46,31 @@ type FollowUpSortOption =
 
 type DateScopeTab = 'all' | 'today' | 'overdue' | 'upcoming' | 'completed';
 
+const STORAGE_FOLLOWUPS_KEY = 'ozostack_followups_v2';
+const loadFollowUpsFromStorage = (): FollowUp[] => {
+  try {
+    const saved = localStorage.getItem(STORAGE_FOLLOWUPS_KEY);
+    if (saved !== null) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return INITIAL_FOLLOW_UPS;
+};
+
 export const FollowUpsView: React.FC = () => {
   const { theme, setActiveNav } = useTheme();
   const { scopeFilter } = useAuth();
   const isLight = theme === 'white-sky';
 
   // Follow-ups state
-  const [followUps, setFollowUps] = useState<FollowUp[]>(INITIAL_FOLLOW_UPS);
+  const [followUps, setFollowUps] = useState<FollowUp[]>(loadFollowUpsFromStorage);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_FOLLOWUPS_KEY, JSON.stringify(followUps));
+    } catch {}
+  }, [followUps]);
   const visibleFollowUps = useMemo(
     () => scopeFilter(followUps, (f) => ({ owner: f.owner })),
     [followUps, scopeFilter]
@@ -287,7 +305,13 @@ export const FollowUpsView: React.FC = () => {
   };
 
   const handleDeleteFollowUp = (id: string, contactName: string) => {
-    setFollowUps((prev) => prev.filter((f) => f.id !== id));
+    setFollowUps((prev) => {
+      const next = prev.filter((f) => f.id !== id);
+      try {
+        localStorage.setItem(STORAGE_FOLLOWUPS_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
     showToast(`Follow-up with "${contactName}" removed.`);
   };
 

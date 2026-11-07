@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Users,
   UserPlus,
@@ -64,6 +64,67 @@ import { JobModal } from './JobModal';
 type ActiveTab = 'directory' | 'departments' | 'attendance' | 'performance' | 'leave' | 'recruitment';
 type ViewMode = 'grid' | 'table';
 
+const STORAGE_TEAM_MEMBERS = 'ozostack_team_members_v1';
+const STORAGE_DEPARTMENTS = 'ozostack_departments_v1';
+const STORAGE_ATTENDANCE = 'ozostack_attendance_v1';
+const STORAGE_LEAVE_REQUESTS = 'ozostack_leave_requests_v1';
+const STORAGE_JOBS = 'ozostack_jobs_v1';
+
+const loadTeamMembers = (): EmployeeMember[] => {
+  try {
+    const saved = localStorage.getItem(STORAGE_TEAM_MEMBERS);
+    if (saved !== null) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return INITIAL_EMPLOYEES;
+};
+
+const loadDepartments = (): DepartmentSummary[] => {
+  try {
+    const saved = localStorage.getItem(STORAGE_DEPARTMENTS);
+    if (saved !== null) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return DEPARTMENTS_DATA;
+};
+
+const loadAttendance = (): AttendanceRecord[] => {
+  try {
+    const saved = localStorage.getItem(STORAGE_ATTENDANCE);
+    if (saved !== null) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return ATTENDANCE_TODAY;
+};
+
+const loadLeaveRequests = (): LeaveRequest[] => {
+  try {
+    const saved = localStorage.getItem(STORAGE_LEAVE_REQUESTS);
+    if (saved !== null) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return INITIAL_LEAVE_REQUESTS;
+};
+
+const loadJobs = (): JobRequisition[] => {
+  try {
+    const saved = localStorage.getItem(STORAGE_JOBS);
+    if (saved !== null) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return INITIAL_JOB_REQUISITIONS;
+};
+
 export const TeamView: React.FC = () => {
   const { theme, setActiveNav } = useTheme();
   const { currency } = useSystemCurrency();
@@ -76,12 +137,28 @@ export const TeamView: React.FC = () => {
   });
 
   // Master data states
-  const [allEmployees, setEmployees] = useState<EmployeeMember[]>(INITIAL_EMPLOYEES);
-  const [departments, setDepartments] = useState<DepartmentSummary[]>(DEPARTMENTS_DATA);
-  const [allAttendance, setAttendance] = useState<AttendanceRecord[]>(ATTENDANCE_TODAY);
-  const [allLeaveRequests, setLeaveRequests] = useState<LeaveRequest[]>(INITIAL_LEAVE_REQUESTS);
+  const [allEmployees, setEmployees] = useState<EmployeeMember[]>(loadTeamMembers);
+  const [departments, setDepartments] = useState<DepartmentSummary[]>(loadDepartments);
+  const [allAttendance, setAttendance] = useState<AttendanceRecord[]>(loadAttendance);
+  const [allLeaveRequests, setLeaveRequests] = useState<LeaveRequest[]>(loadLeaveRequests);
   const [allReviews, setReviews] = useState(INITIAL_PERFORMANCE_REVIEWS);
-  const [jobs, setJobs] = useState<JobRequisition[]>(INITIAL_JOB_REQUISITIONS);
+  const [jobs, setJobs] = useState<JobRequisition[]>(loadJobs);
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_TEAM_MEMBERS, JSON.stringify(allEmployees)); } catch {}
+  }, [allEmployees]);
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_DEPARTMENTS, JSON.stringify(departments)); } catch {}
+  }, [departments]);
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_ATTENDANCE, JSON.stringify(allAttendance)); } catch {}
+  }, [allAttendance]);
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_LEAVE_REQUESTS, JSON.stringify(allLeaveRequests)); } catch {}
+  }, [allLeaveRequests]);
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_JOBS, JSON.stringify(jobs)); } catch {}
+  }, [jobs]);
 
   // Scoped records reactive to the signed-in user & role scope
   const employees = useMemo(
@@ -251,7 +328,13 @@ export const TeamView: React.FC = () => {
   const handleDeleteMember = (id: string, name: string) => {
     if (!allow('delete')) return;
     if (confirm(`Are you sure you want to deactivate and remove ${name} from the active directory?`)) {
-      setEmployees((prev) => prev.filter((e) => e.id !== id));
+      setEmployees((prev) => {
+        const next = prev.filter((e) => e.id !== id);
+        try {
+          localStorage.setItem(STORAGE_TEAM_MEMBERS, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
       if (activeDrawerMember?.id === id) setActiveDrawerMember(null);
       showToast(`Removed ${name} from active roster.`);
     }
@@ -289,7 +372,13 @@ export const TeamView: React.FC = () => {
     } else {
       if (!confirm(`Are you sure you want to delete department "${deptName}"?`)) return;
     }
-    setDepartments((prev) => prev.filter((d) => d.id !== deptId));
+    setDepartments((prev) => {
+      const next = prev.filter((d) => d.id !== deptId);
+      try {
+        localStorage.setItem(STORAGE_DEPARTMENTS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
     if (selectedDept === deptName) setSelectedDept('All');
     showToast(`Department "${deptName}" deleted.`);
   };
@@ -312,7 +401,13 @@ export const TeamView: React.FC = () => {
   const handleDeleteAttendance = (id: string, name: string) => {
     if (!allow('delete')) return;
     if (confirm(`Delete attendance entry for ${name}?`)) {
-      setAttendance((prev) => prev.filter((a) => a.id !== id));
+      setAttendance((prev) => {
+        const next = prev.filter((a) => a.id !== id);
+        try {
+          localStorage.setItem(STORAGE_ATTENDANCE, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
       showToast(`Attendance record deleted for ${name}.`);
     }
   };
@@ -343,7 +438,13 @@ export const TeamView: React.FC = () => {
   const handleDeleteJob = (id: string, title: string) => {
     if (!allow('delete')) return;
     if (confirm(`Are you sure you want to delete hiring requisition "${title}"?`)) {
-      setJobs((prev) => prev.filter((j) => j.id !== id));
+      setJobs((prev) => {
+        const next = prev.filter((j) => j.id !== id);
+        try {
+          localStorage.setItem(STORAGE_JOBS, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
       showToast(`Deleted job requisition "${title}".`);
     }
   };
@@ -411,7 +512,13 @@ export const TeamView: React.FC = () => {
   const handleDeleteLeave = (id: string) => {
     if (!allow('delete')) return;
     if (confirm('Delete this leave request record?')) {
-      setLeaveRequests((prev) => prev.filter((l) => l.id !== id));
+      setLeaveRequests((prev) => {
+        const next = prev.filter((l) => l.id !== id);
+        try {
+          localStorage.setItem(STORAGE_LEAVE_REQUESTS, JSON.stringify(next));
+        } catch {}
+        return next;
+      });
       showToast('Leave record removed.');
     }
   };

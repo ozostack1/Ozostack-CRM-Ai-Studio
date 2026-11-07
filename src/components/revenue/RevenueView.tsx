@@ -48,9 +48,9 @@ export const RevenueView: React.FC = () => {
   const [transactions, setTransactions] = useState<RevenueTransaction[]>(() => {
     try {
       const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (stored) {
+      if (stored !== null) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
           return parsed;
         }
       }
@@ -102,7 +102,13 @@ export const RevenueView: React.FC = () => {
 
   // Handle delete
   const handleDeleteTransaction = (id: string) => {
-    setTransactions((prev) => prev.filter((tx) => tx.id !== id));
+    setTransactions((prev) => {
+      const next = prev.filter((tx) => tx.id !== id);
+      try {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
     setIsDetailsDrawerOpen(false);
     setSelectedTransaction(null);
   };
