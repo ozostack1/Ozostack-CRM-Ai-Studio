@@ -1,15 +1,12 @@
-name: Deploy OzoStack CRM to GitHub Pages
+name: Build and Test OzoStack CRM
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -26,11 +23,3 @@ jobs:
 
       - name: Build Production Bundle
         run: npm run build
-        env:
-          BASE_PATH: './'
-
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dist
