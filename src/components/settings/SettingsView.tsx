@@ -21,6 +21,8 @@ import {
   Download,
   Sliders,
   AlertCircle,
+  AlertTriangle,
+  RotateCcw,
   Check,
   X,
   ChevronLeft,
@@ -42,10 +44,37 @@ import {
   UserAccount,
   UserStatus,
 } from '../../context/authData';
+import {
+  INITIAL_LEADS,
+  INITIAL_DEALS,
+  INITIAL_TASKS,
+  CALENDAR_EVENTS,
+  INITIAL_PROJECTS,
+  INITIAL_PROJECT_ACTIVITIES,
+  INITIAL_CONTACTS,
+  INITIAL_COMPANIES,
+  INITIAL_FOLLOW_UPS,
+  INITIAL_DETAILED_INVOICES,
+  INITIAL_PROPOSALS,
+  INITIAL_QUOTATIONS,
+  INITIAL_CONTRACTS,
+  INITIAL_EXPENSES,
+  INITIAL_PAYMENTS,
+  INITIAL_DOCUMENTS,
+  INITIAL_TIME_ENTRIES,
+  INITIAL_REVENUE_TRANSACTIONS,
+} from '../../data/mockData';
+import {
+  INITIAL_EMPLOYEES,
+  DEPARTMENTS_DATA,
+  ATTENDANCE_TODAY,
+  INITIAL_LEAVE_REQUESTS,
+  INITIAL_JOB_REQUISITIONS,
+} from '../team/teamMockData';
 import { CrmSetupSection } from './CrmSetupSection';
 import { LeadFormBuilderSection } from './LeadFormBuilderSection';
 
-type TabId = 'my-account' | 'staff' | 'roles' | 'crm-config' | 'lead-forms' | 'company' | 'security';
+type TabId = 'my-account' | 'staff' | 'roles' | 'crm-config' | 'lead-forms' | 'company' | 'security' | 'danger-zone';
 
 const DEPARTMENTS = [
   'Engineering',
@@ -139,6 +168,98 @@ export const SettingsView: React.FC = () => {
   // --- Audit filter ---
   const [auditCat, setAuditCat] = useState<'All' | 'Auth' | 'User' | 'Role' | 'Security' | 'Workspace'>('All');
   const [auditSearch, setAuditSearch] = useState('');
+
+  // --- Danger Zone State ---
+  const [dangerModalMode, setDangerModalMode] = useState<'reset' | 'wipe' | null>(null);
+  const [dangerPassword, setDangerPassword] = useState('');
+  const [dangerError, setDangerError] = useState<string | null>(null);
+  const [showDangerPassword, setShowDangerPassword] = useState(false);
+
+  const handleDangerConfirm = (e: React.FormEvent) => {
+    e.preventDefault();
+    setDangerError(null);
+
+    const entered = dangerPassword.trim();
+    const isValid =
+      (currentUser && entered === currentUser.password) ||
+      entered === DEFAULT_PASSWORD ||
+      entered === 'Admin@123';
+
+    if (!isValid) {
+      setDangerError('Incorrect security password. Authorization failed.');
+      return;
+    }
+
+    if (dangerModalMode === 'reset') {
+      try {
+        localStorage.setItem('ozostack_leads_v2', JSON.stringify(INITIAL_LEADS));
+        localStorage.setItem('ozostack_deals_v2', JSON.stringify(INITIAL_DEALS));
+        localStorage.setItem('ozostack_tasks_v2', JSON.stringify(INITIAL_TASKS));
+        localStorage.setItem('ozostack_calendar_events_v3', JSON.stringify(CALENDAR_EVENTS));
+        localStorage.setItem('ozostack_projects', JSON.stringify(INITIAL_PROJECTS));
+        localStorage.setItem('ozostack_project_activities', JSON.stringify(INITIAL_PROJECT_ACTIVITIES));
+        localStorage.setItem('ozostack_contacts_v1', JSON.stringify(INITIAL_CONTACTS));
+        localStorage.setItem('ozostack_companies_v1', JSON.stringify(INITIAL_COMPANIES));
+        localStorage.setItem('ozostack_followups_v2', JSON.stringify(INITIAL_FOLLOW_UPS));
+        localStorage.setItem('ozostack_invoices_v1', JSON.stringify(INITIAL_DETAILED_INVOICES));
+        localStorage.setItem('ozostack_proposals_v1', JSON.stringify(INITIAL_PROPOSALS));
+        localStorage.setItem('ozostack_quotations_v1', JSON.stringify(INITIAL_QUOTATIONS));
+        localStorage.setItem('ozostack_contracts_v1', JSON.stringify(INITIAL_CONTRACTS));
+        localStorage.setItem('ozostack_expenses_v1', JSON.stringify(INITIAL_EXPENSES));
+        localStorage.setItem('ozostack_payments_v1', JSON.stringify(INITIAL_PAYMENTS));
+        localStorage.setItem('ozostack_documents_v2', JSON.stringify(INITIAL_DOCUMENTS));
+        localStorage.setItem('ozostack_time_entries_v1', JSON.stringify(INITIAL_TIME_ENTRIES));
+        localStorage.setItem('ozostack_team_members_v1', JSON.stringify(INITIAL_EMPLOYEES));
+        localStorage.setItem('ozostack_departments_v1', JSON.stringify(DEPARTMENTS_DATA));
+        localStorage.setItem('ozostack_attendance_v1', JSON.stringify(ATTENDANCE_TODAY));
+        localStorage.setItem('ozostack_leave_requests_v1', JSON.stringify(INITIAL_LEAVE_REQUESTS));
+        localStorage.setItem('ozostack_jobs_v1', JSON.stringify(INITIAL_JOB_REQUISITIONS));
+        localStorage.setItem('ozostack_revenue_transactions_v1', JSON.stringify(INITIAL_REVENUE_TRANSACTIONS));
+      } catch (err) {
+        console.error('Reset mock data failed', err);
+      }
+      logAudit('Security', 'Reset all CRM mock data to default', currentUser?.email || 'admin');
+      notify('All CRM mock data has been reset to defaults successfully!');
+    } else if (dangerModalMode === 'wipe') {
+      try {
+        localStorage.setItem('ozostack_leads_v2', JSON.stringify([]));
+        localStorage.setItem('ozostack_deals_v2', JSON.stringify([]));
+        localStorage.setItem('ozostack_tasks_v2', JSON.stringify([]));
+        localStorage.setItem('ozostack_calendar_events_v3', JSON.stringify([]));
+        localStorage.setItem('ozostack_projects', JSON.stringify([]));
+        localStorage.setItem('ozostack_project_activities', JSON.stringify([]));
+        localStorage.setItem('ozostack_contacts_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_companies_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_followups_v2', JSON.stringify([]));
+        localStorage.setItem('ozostack_invoices_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_proposals_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_quotations_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_contracts_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_expenses_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_payments_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_documents_v2', JSON.stringify([]));
+        localStorage.setItem('ozostack_time_entries_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_team_members_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_departments_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_attendance_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_leave_requests_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_jobs_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_revenue_transactions_v1', JSON.stringify([]));
+      } catch (err) {
+        console.error('Wipe CRM data failed', err);
+      }
+      logAudit('Security', 'Wiped all CRM records clean', currentUser?.email || 'admin');
+      notify('All CRM mock data has been wiped clean! The workspace is now empty.');
+    }
+
+    // Immediately notify dashboard and views
+    window.dispatchEvent(new Event('storage'));
+    window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
+
+    setDangerModalMode(null);
+    setDangerPassword('');
+    setDangerError(null);
+  };
 
   const selectedRole = useMemo(
     () => roles.find((r) => r.id === selectedRoleId) || roles[0],
@@ -369,6 +490,7 @@ export const SettingsView: React.FC = () => {
     { id: 'lead-forms', label: 'Web-to-Lead Form Builder', icon: FileText, show: isAdmin },
     { id: 'company', label: 'Company & Finance', icon: Building, show: isAdmin },
     { id: 'security', label: `Security & Audit (${audit.length})`, icon: ShieldCheck, show: isAdmin },
+    { id: 'danger-zone', label: 'Danger Zone & Mock Data', icon: AlertTriangle, show: isAdmin },
   ];
 
   return (
@@ -1377,6 +1499,100 @@ export const SettingsView: React.FC = () => {
       {activeTab === 'lead-forms' && isAdmin && <LeadFormBuilderSection onNotify={notify} />}
 
       {/* =================================================================== */}
+      {/* TAB: DANGER ZONE & CRM MOCK DATA RESET / WIPE                       */}
+      {/* =================================================================== */}
+      {activeTab === 'danger-zone' && isAdmin && (
+        <div className="space-y-4 animate-fade-in">
+          <div className={`p-5 rounded-2xl border ${cardCls} border-rose-500/30 bg-rose-500/5`}>
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 rounded-xl bg-rose-500/10 text-rose-500 shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <h2 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                  <span>Danger Zone &amp; CRM Mock Data Control</span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-600 dark:text-rose-400">
+                    Administrator Protected
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                  Perform high-impact database actions in one click. Every action requires password confirmation before execution to keep your CRM safe and intentional.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Card 1: Reset All Mock Data to Default */}
+            <div className={`p-5 rounded-2xl border flex flex-col justify-between space-y-4 ${cardCls} border-amber-500/20 hover:border-amber-500/40 transition-colors`}>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 uppercase tracking-wider">
+                    One-Click Restore
+                  </span>
+                  <RotateCcw className="w-4 h-4 text-amber-500" />
+                </div>
+                <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
+                  Reset All Mock Data to Default
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                  Re-populates all CRM entities (Leads, Deals, Tasks, Calendar Events, Projects, Employees, Invoices, Contacts, Follow-ups, and Payments) with clean initial demo mock data. Any records you created or deleted will be reset to default.
+                </p>
+              </div>
+
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDangerModalMode('reset');
+                    setDangerPassword('');
+                    setDangerError(null);
+                  }}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white shadow-xs transition-colors"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span>Reset All Mock Data to Default</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Card 2: Wipe All CRM Data Clean */}
+            <div className={`p-5 rounded-2xl border flex flex-col justify-between space-y-4 ${cardCls} border-rose-500/20 hover:border-rose-500/40 transition-colors`}>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/10 text-rose-600 dark:text-rose-400 uppercase tracking-wider">
+                    Blank Database
+                  </span>
+                  <Trash2 className="w-4 h-4 text-rose-500" />
+                </div>
+                <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
+                  Wipe All CRM Data (Empty Database)
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                  Permanently clears all mock records across the entire CRM, resetting leads, deals, tasks, events, projects, and employees to 0. Leaves all dashboards, tables, and views 100% clean so you can start with a fresh slate.
+                </p>
+              </div>
+
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDangerModalMode('wipe');
+                    setDangerPassword('');
+                    setDangerError(null);
+                  }}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold bg-rose-500 hover:bg-rose-600 text-white shadow-xs transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Wipe All CRM Data Clean</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
       {/* MODAL: PROVISION / EDIT STAFF ACCESS & OVERRIDES                    */}
       {/* =================================================================== */}
       {editingUser && (
@@ -1572,6 +1788,106 @@ export const SettingsView: React.FC = () => {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* MODAL: DANGER ZONE PASSWORD AUTHORIZATION                           */}
+      {/* =================================================================== */}
+      {dangerModalMode && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
+          <form
+            onSubmit={handleDangerConfirm}
+            className={`w-full max-w-md rounded-2xl border p-5 sm:p-6 space-y-4 shadow-2xl ${cardCls}`}
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className={`p-1.5 rounded-lg ${dangerModalMode === 'reset' ? 'bg-amber-500/15 text-amber-500' : 'bg-rose-500/15 text-rose-500'}`}>
+                  {dangerModalMode === 'reset' ? <RotateCcw className="w-4 h-4" /> : <Trash2 className="w-4 h-4" />}
+                </div>
+                <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
+                  {dangerModalMode === 'reset' ? 'Authorize Mock Data Reset' : 'Authorize CRM Data Wipe'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setDangerModalMode(null);
+                  setDangerPassword('');
+                  setDangerError(null);
+                }}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="text-xs text-slate-500 dark:text-slate-400 space-y-2">
+              <p>
+                {dangerModalMode === 'reset'
+                  ? 'You are about to restore all initial mock data across Leads, Deals, Tasks, Calendar Events, Projects, Employees, Invoices, Contacts, and Payments. All current modifications will be replaced with default data.'
+                  : 'You are about to permanently wipe all records across Leads, Deals, Tasks, Calendar Events, Projects, Employees, Invoices, Contacts, and Payments. All tables will be completely empty.'}
+              </p>
+              <p className="font-semibold text-slate-700 dark:text-slate-200">
+                Please enter your login password or administrator password to confirm:
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="relative">
+                <input
+                  type={showDangerPassword ? 'text' : 'password'}
+                  required
+                  autoFocus
+                  placeholder="Enter your password (e.g. Admin@123)"
+                  value={dangerPassword}
+                  onChange={(e) => {
+                    setDangerPassword(e.target.value);
+                    setDangerError(null);
+                  }}
+                  className={`${inputCls} pr-9`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowDangerPassword((prev) => !prev)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                  tabIndex={-1}
+                >
+                  {showDangerPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+              {dangerError && (
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold text-rose-500">
+                  <AlertCircle className="w-3 h-3 shrink-0" />
+                  <span>{dangerError}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setDangerModalMode(null);
+                  setDangerPassword('');
+                  setDangerError(null);
+                }}
+                className="px-4 py-2 rounded-xl border text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className={`px-4 py-2 rounded-xl text-white text-xs font-bold transition-all ${
+                  dangerModalMode === 'reset'
+                    ? 'bg-amber-500 hover:bg-amber-600'
+                    : 'bg-rose-500 hover:bg-rose-600'
+                }`}
+              >
+                {dangerModalMode === 'reset' ? 'Confirm & Reset to Default' : 'Confirm & Wipe Clean'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>

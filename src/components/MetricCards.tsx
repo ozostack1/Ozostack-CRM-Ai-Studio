@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   DollarSign,
   Receipt,
@@ -82,6 +82,106 @@ export const MetricCards: React.FC = () => {
       console.error(e);
     }
   };
+
+  const readLiveStorage = () => {
+    const readKey = (key: string) => {
+      try {
+        const saved = localStorage.getItem(key);
+        if (saved !== null) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) return parsed;
+        }
+      } catch {}
+      return null;
+    };
+    return {
+      leads: readKey('ozostack_leads_v2'),
+      deals: readKey('ozostack_deals_v2'),
+      tasks: readKey('ozostack_tasks_v2'),
+      projects: readKey('ozostack_projects'),
+      contacts: readKey('ozostack_contacts_v1'),
+      followUps: readKey('ozostack_followups_v2'),
+    };
+  };
+
+  const [liveData, setLiveData] = useState(readLiveStorage);
+
+  useEffect(() => {
+    const sync = () => setLiveData(readLiveStorage());
+    window.addEventListener('storage', sync);
+    window.addEventListener('ozostack-crm-config-changed', sync);
+    return () => {
+      window.removeEventListener('storage', sync);
+      window.removeEventListener('ozostack-crm-config-changed', sync);
+    };
+  }, []);
+
+  const dynamicCrmSalesKpis = useMemo(() => {
+    return CRM_SALES_KPIS.map((kpi) => {
+      if (kpi.id === 'new-leads' && liveData.leads !== null) {
+        const count = liveData.leads.length;
+        return { ...kpi, value: String(count), change: `${count} total leads` };
+      }
+      if (kpi.id === 'qualified-leads' && liveData.leads !== null) {
+        const count = liveData.leads.filter((l: any) => l.stage === 'Qualified').length;
+        return { ...kpi, value: String(count), change: `${count} qualified` };
+      }
+      if (kpi.id === 'followups-today' && liveData.followUps !== null) {
+        const count = liveData.followUps.length;
+        return { ...kpi, value: String(count), change: `${count} scheduled` };
+      }
+      if (kpi.id === 'proposals-sent' && liveData.deals !== null) {
+        const count = liveData.deals.filter((d: any) => (d.stage || '').toLowerCase().includes('proposal') || (d.stage || '').toLowerCase().includes('contract')).length;
+        return { ...kpi, value: String(count), change: `${count} proposals` };
+      }
+      if (kpi.id === 'deals-won' && liveData.deals !== null) {
+        const count = liveData.deals.filter((d: any) => (d.stage || '').toLowerCase().includes('won')).length;
+        return { ...kpi, value: String(count), change: `${count} won` };
+      }
+      if (kpi.id === 'deals-lost' && liveData.deals !== null) {
+        const count = liveData.deals.filter((d: any) => (d.stage || '').toLowerCase().includes('lost')).length;
+        return { ...kpi, value: String(count), change: `${count} lost` };
+      }
+      if (kpi.id === 'closing-rate' && liveData.deals !== null) {
+        const won = liveData.deals.filter((d: any) => (d.stage || '').toLowerCase().includes('won')).length;
+        const lost = liveData.deals.filter((d: any) => (d.stage || '').toLowerCase().includes('lost')).length;
+        const rate = (won + lost) > 0 ? ((won / (won + lost)) * 100).toFixed(1) + '%' : '0.0%';
+        return { ...kpi, value: rate, change: `${won} of ${won + lost} closed` };
+      }
+      return kpi;
+    });
+  }, [liveData]);
+
+  const dynamicOperationsKpis = useMemo(() => {
+    return OPERATIONS_KPIS.map((kpi) => {
+      if (kpi.id === 'projects-running' && liveData.projects !== null) {
+        const count = liveData.projects.filter((p: any) => (p.status || '').toLowerCase().includes('progress')).length;
+        return { ...kpi, value: String(count), change: `${count} active` };
+      }
+      if (kpi.id === 'projects-delayed' && liveData.projects !== null) {
+        const count = liveData.projects.filter((p: any) => (p.status || '').toLowerCase().includes('delayed') || (p.status || '').toLowerCase().includes('critical')).length;
+        return { ...kpi, value: String(count), change: `${count} delayed` };
+      }
+      if (kpi.id === 'tasks-due-today' && liveData.tasks !== null) {
+        const count = liveData.tasks.filter((t: any) => t.status !== 'Completed').length;
+        return { ...kpi, value: String(count), change: `${count} pending` };
+      }
+      if (kpi.id === 'tasks-completed' && liveData.tasks !== null) {
+        const count = liveData.tasks.filter((t: any) => t.status === 'Completed').length;
+        return { ...kpi, value: String(count), change: `${count} completed` };
+      }
+      return kpi;
+    });
+  }, [liveData]);
+
+  const dynamicTopRowKpis = useMemo(() => {
+    return TOP_ROW_KPIS.map((kpi) => {
+      if (kpi.id === 'active-clients' && liveData.contacts !== null) {
+        return { ...kpi, value: String(liveData.contacts.length), change: `${liveData.contacts.length} clients` };
+      }
+      return kpi;
+    });
+  }, [liveData]);
 
   const cardBg = isLight
     ? 'bg-white border-sky-100/80 shadow-xs hover:border-sky-300'
@@ -262,7 +362,7 @@ export const MetricCards: React.FC = () => {
           <div className="grid grid-cols-1 xl:grid-cols-12 gap-3 items-stretch">
             {/* 8 Metric Cards Grid (8 cols on large screens, spanning 9 xl columns) */}
             <div className="xl:col-span-9 grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-              {TOP_ROW_KPIS.map((kpi, idx) => {
+              {dynamicTopRowKpis.map((kpi, idx) => {
                 const Icon = getIcon(kpi.iconName);
                 const iconBg = [
                   'bg-purple-500/15 text-purple-500',
@@ -430,7 +530,7 @@ export const MetricCards: React.FC = () => {
 
           {/* Row 2: 7 CRM Funnel quick stats */}
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-2.5">
-            {CRM_SALES_KPIS.map((kpi, idx) => {
+            {dynamicCrmSalesKpis.map((kpi, idx) => {
               const Icon = getIcon(kpi.iconName);
               const iconColors = [
                 'text-sky-500 bg-sky-500/10',
@@ -481,7 +581,7 @@ export const MetricCards: React.FC = () => {
 
           {/* Row 3: 7 Operational Stats */}
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-2.5">
-            {OPERATIONS_KPIS.map((kpi, idx) => {
+            {dynamicOperationsKpis.map((kpi, idx) => {
               const Icon = getIcon(kpi.iconName);
               const iconColors = [
                 'text-indigo-400 bg-indigo-500/10',
@@ -760,7 +860,7 @@ export const MetricCards: React.FC = () => {
               </div>
 
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center text-xs">
-                {CRM_SALES_KPIS.slice(0, 6).map((kpi) => (
+                {dynamicCrmSalesKpis.slice(0, 6).map((kpi) => (
                   <div
                     key={kpi.id}
                     onClick={() => handleKpiClick(kpi.id)}
@@ -798,7 +898,7 @@ export const MetricCards: React.FC = () => {
               </div>
 
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center text-xs">
-                {OPERATIONS_KPIS.slice(0, 6).map((kpi) => (
+                {dynamicOperationsKpis.slice(0, 6).map((kpi) => (
                   <div
                     key={kpi.id}
                     onClick={() => handleKpiClick(kpi.id)}
@@ -830,7 +930,7 @@ export const MetricCards: React.FC = () => {
         <div className="space-y-2.5 animate-fade-in">
           {/* Ticker Row: 8 Horizontal Financial Metrics */}
           <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
-            {TOP_ROW_KPIS.map((kpi) => (
+            {dynamicTopRowKpis.map((kpi) => (
               <div
                 key={kpi.id}
                 onClick={() => handleKpiClick(kpi.id)}
@@ -904,7 +1004,7 @@ export const MetricCards: React.FC = () => {
 
           {/* Combined CRM & Operations Pill Tickers */}
           <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
-            {[...CRM_SALES_KPIS.slice(0, 4), ...OPERATIONS_KPIS.slice(0, 3)].map((kpi) => (
+            {[...dynamicCrmSalesKpis.slice(0, 4), ...dynamicOperationsKpis.slice(0, 3)].map((kpi) => (
               <div
                 key={kpi.id}
                 onClick={() => handleKpiClick(kpi.id)}
@@ -1149,10 +1249,10 @@ export const MetricCards: React.FC = () => {
           {/* Filtered Grid of Metrics */}
           <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
             {(radialTab === 'all'
-              ? [...CRM_SALES_KPIS, ...OPERATIONS_KPIS]
+              ? [...dynamicCrmSalesKpis, ...dynamicOperationsKpis]
               : radialTab === 'sales'
-              ? CRM_SALES_KPIS
-              : OPERATIONS_KPIS
+              ? dynamicCrmSalesKpis
+              : dynamicOperationsKpis
             ).map((kpi) => {
               const Icon = getIcon(kpi.iconName);
 

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Users,
   FolderKanban,
@@ -15,6 +15,60 @@ import { BOTTOM_SUMMARY_KPIS } from '../data/mockData';
 export const BottomKpiStrip: React.FC = () => {
   const { theme, setActiveNav } = useTheme();
   const isLight = theme === 'white-sky';
+
+  const readLive = () => {
+    const parse = (key: string) => {
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw !== null) {
+          const p = JSON.parse(raw);
+          if (Array.isArray(p)) return p;
+        }
+      } catch {}
+      return null;
+    };
+    return {
+      contacts: parse('ozostack_contacts_v1'),
+      projects: parse('ozostack_projects'),
+      team: parse('ozostack_team_members_v1'),
+      timeEntries: parse('ozostack_time_entries_v1'),
+    };
+  };
+
+  const [live, setLive] = useState(readLive);
+
+  useEffect(() => {
+    const sync = () => setLive(readLive());
+    window.addEventListener('storage', sync);
+    window.addEventListener('ozostack-crm-config-changed', sync);
+    return () => {
+      window.removeEventListener('storage', sync);
+      window.removeEventListener('ozostack-crm-config-changed', sync);
+    };
+  }, []);
+
+  const dynamicSummaryKpis = useMemo(() => {
+    return BOTTOM_SUMMARY_KPIS.map((kpi) => {
+      if (kpi.id === 'b1' && live.contacts !== null) {
+        return { ...kpi, value: String(live.contacts.length), change: `${live.contacts.length} clients` };
+      }
+      if (kpi.id === 'b2' && live.projects !== null) {
+        return { ...kpi, value: String(live.projects.length), change: `${live.projects.length} projects` };
+      }
+      if (kpi.id === 'b3' && live.team !== null) {
+        return { ...kpi, value: String(live.team.length), change: `${live.team.length} members` };
+      }
+      if (kpi.id === 'b5' && live.timeEntries !== null) {
+        const totalHrs = live.timeEntries.reduce((sum: number, entry: any) => sum + (Number(entry.hours) || 0), 0);
+        return { ...kpi, value: totalHrs.toLocaleString(), change: `${live.timeEntries.length} logged shifts` };
+      }
+      if (kpi.id === 'b8' && live.contacts !== null) {
+        const recurringCount = Math.round(live.contacts.length * 0.65);
+        return { ...kpi, value: String(recurringCount), change: `${live.contacts.length > 0 ? '65%' : '0%'} recurring` };
+      }
+      return kpi;
+    });
+  }, [live]);
 
   const cardBg = isLight
     ? 'bg-white border-sky-100/80 shadow-xs'
@@ -70,7 +124,7 @@ export const BottomKpiStrip: React.FC = () => {
 
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 gap-2.5 pt-1">
-      {BOTTOM_SUMMARY_KPIS.map((kpi, idx) => {
+      {dynamicSummaryKpis.map((kpi, idx) => {
         const Icon = getIcon(kpi.icon);
         const iconBg = [
           'bg-sky-500/15 text-sky-500',

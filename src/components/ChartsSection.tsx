@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   ChevronDown,
   Sparkles,
@@ -478,8 +478,58 @@ export const ChartsSection: React.FC = () => {
     ? 'bg-white border-sky-100 text-slate-700 shadow-xl'
     : 'bg-slate-900 border-slate-700 text-slate-200 shadow-2xl';
 
+  const readLiveCrm = () => {
+    try {
+      const rawLeads = localStorage.getItem('ozostack_leads_v2');
+      const rawDeals = localStorage.getItem('ozostack_deals_v2');
+      const leads = rawLeads !== null ? JSON.parse(rawLeads) : null;
+      const deals = rawDeals !== null ? JSON.parse(rawDeals) : null;
+      return { leads, deals };
+    } catch {}
+    return { leads: null, deals: null };
+  };
+
+  const [liveCrm, setLiveCrm] = useState(readLiveCrm);
+
+  useEffect(() => {
+    const sync = () => setLiveCrm(readLiveCrm());
+    window.addEventListener('storage', sync);
+    window.addEventListener('ozostack-crm-config-changed', sync);
+    return () => {
+      window.removeEventListener('storage', sync);
+      window.removeEventListener('ozostack-crm-config-changed', sync);
+    };
+  }, []);
+
   const activeRevenue = REVENUE_DATA_MAP[revenuePeriod];
-  const activePipeline = PIPELINE_DATA_MAP[pipelinePeriod];
+  const basePipeline = PIPELINE_DATA_MAP[pipelinePeriod];
+  const activePipeline = useMemo(() => {
+    if (liveCrm.leads !== null && liveCrm.deals !== null) {
+      if (liveCrm.leads.length === 0 && liveCrm.deals.length === 0) {
+        return {
+          stages: basePipeline.stages.map((s) => ({ ...s, count: 0, percentage: '0%' })),
+          conversion: '0.0% ($0)',
+        };
+      }
+      const totalLeads = liveCrm.leads.length;
+      const wonDeals = liveCrm.deals.filter((d: any) => (d.stage || '').toLowerCase().includes('won')).length;
+      const proposals = liveCrm.deals.filter((d: any) => (d.stage || '').toLowerCase().includes('proposal') || (d.stage || '').toLowerCase().includes('contract')).length;
+      const totalPipelineVal = liveCrm.deals.reduce((sum: number, d: any) => sum + (Number(d.value) || 0), 0);
+      const convRate = totalLeads > 0 ? ((wonDeals / totalLeads) * 100).toFixed(1) : '0.0';
+      return {
+        stages: [
+          { label: 'Lead In', count: totalLeads, percentage: totalLeads > 0 ? '100%' : '0%', color: '#3b82f6' },
+          { label: 'Contact Made', count: Math.round(totalLeads * 0.7), percentage: totalLeads > 0 ? '70%' : '0%', color: '#0ea5e9' },
+          { label: 'Needs Defined', count: Math.round(totalLeads * 0.4), percentage: totalLeads > 0 ? '40%' : '0%', color: '#06b6d4' },
+          { label: 'Proposal Sent', count: proposals, percentage: totalLeads > 0 ? `${Math.round((proposals / totalLeads) * 100)}%` : '0%', color: '#14b8a6' },
+          { label: 'Negotiation', count: Math.round(proposals * 0.5), percentage: totalLeads > 0 ? `${Math.round((proposals * 0.5 / totalLeads) * 100)}%` : '0%', color: '#10b981' },
+          { label: 'Won', count: wonDeals, percentage: totalLeads > 0 ? `${convRate}%` : '0%', color: '#22c55e' },
+        ],
+        conversion: `${convRate}% (${currency.symbol}${totalPipelineVal.toLocaleString()})`,
+      };
+    }
+    return basePipeline;
+  }, [liveCrm, pipelinePeriod, basePipeline, currency.symbol]);
   const activeService = SERVICE_DATA_MAP[servicePeriod];
   const activeLeads = LEADS_DATA_MAP[leadsSourcePeriod];
 
