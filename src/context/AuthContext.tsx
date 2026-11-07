@@ -14,7 +14,7 @@ import {
 } from './authData';
 
 const STORE_KEY = 'ozo-auth-store-v5';
-const SESSION_KEY = 'ozo-auth-session-v2';
+const SESSION_KEY = 'ozo-auth-session-v3';
 
 export interface ScopeTarget {
   owner?: string | (string | undefined)[];
@@ -81,11 +81,11 @@ const loadStore = (): Store => {
 const loadSession = (): Session | null => {
   try {
     const raw = sessionStorage.getItem(SESSION_KEY);
-    if (!raw) return { userId: 'usr-emp-1' };
-    if (raw === 'SIGNED_OUT') return null;
-    return JSON.parse(raw);
+    if (!raw || raw === 'SIGNED_OUT') return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && parsed.userId ? parsed : null;
   } catch {
-    return { userId: 'usr-emp-1' };
+    return null;
   }
 };
 
