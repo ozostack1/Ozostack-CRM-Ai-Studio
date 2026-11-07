@@ -479,14 +479,23 @@ export const ChartsSection: React.FC = () => {
     : 'bg-slate-900 border-slate-700 text-slate-200 shadow-2xl';
 
   const readLiveCrm = () => {
-    try {
-      const rawLeads = localStorage.getItem('ozostack_leads_v2');
-      const rawDeals = localStorage.getItem('ozostack_deals_v2');
-      const leads = rawLeads !== null ? JSON.parse(rawLeads) : null;
-      const deals = rawDeals !== null ? JSON.parse(rawDeals) : null;
-      return { leads, deals };
-    } catch {}
-    return { leads: null, deals: null };
+    const parse = (key: string) => {
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw !== null) {
+          const p = JSON.parse(raw);
+          if (Array.isArray(p)) return p;
+        }
+      } catch {}
+      return null;
+    };
+    return {
+      leads: parse('ozostack_leads_v2'),
+      deals: parse('ozostack_deals_v2'),
+      invoices: parse('ozostack_invoices_v1'),
+      tasks: parse('ozostack_tasks_v2'),
+      contacts: parse('ozostack_contacts_v1'),
+    };
   };
 
   const [liveCrm, setLiveCrm] = useState(readLiveCrm);
@@ -501,7 +510,26 @@ export const ChartsSection: React.FC = () => {
     };
   }, []);
 
-  const activeRevenue = REVENUE_DATA_MAP[revenuePeriod];
+  const baseRevenue = REVENUE_DATA_MAP[revenuePeriod];
+  const activeRevenue = useMemo(() => {
+    if (liveCrm.invoices !== null && liveCrm.invoices.length === 0) {
+      return {
+        total: `${currency.symbol}0`,
+        totalGrowth: '0.0%',
+        oneTime: `${currency.symbol}0`,
+        oneTimeGrowth: '0.0%',
+        recurring: `${currency.symbol}0`,
+        recurringGrowth: '0.0%',
+        xLabels: baseRevenue.xLabels,
+        areaD: 'M 40 115 L 290 115 L 290 115 L 40 115 Z',
+        dashedD: 'M 40 115 L 290 115',
+        solidD: 'M 40 115 L 290 115',
+        points: baseRevenue.points.map((p) => ({ cx: p.cx, cy: 115 })),
+      };
+    }
+    return baseRevenue;
+  }, [liveCrm.invoices, revenuePeriod, baseRevenue, currency.symbol]);
+
   const basePipeline = PIPELINE_DATA_MAP[pipelinePeriod];
   const activePipeline = useMemo(() => {
     if (liveCrm.leads !== null && liveCrm.deals !== null) {
@@ -530,8 +558,28 @@ export const ChartsSection: React.FC = () => {
     }
     return basePipeline;
   }, [liveCrm, pipelinePeriod, basePipeline, currency.symbol]);
-  const activeService = SERVICE_DATA_MAP[servicePeriod];
-  const activeLeads = LEADS_DATA_MAP[leadsSourcePeriod];
+
+  const baseService = SERVICE_DATA_MAP[servicePeriod];
+  const activeService = useMemo(() => {
+    if (liveCrm.invoices !== null && liveCrm.invoices.length === 0) {
+      return {
+        total: `${currency.symbol}0`,
+        items: [],
+      };
+    }
+    return baseService;
+  }, [liveCrm.invoices, servicePeriod, baseService, currency.symbol]);
+
+  const baseLeads = LEADS_DATA_MAP[leadsSourcePeriod];
+  const activeLeads = useMemo(() => {
+    if (liveCrm.leads !== null && liveCrm.leads.length === 0) {
+      return {
+        total: 0,
+        items: [],
+      };
+    }
+    return baseLeads;
+  }, [liveCrm.leads, leadsSourcePeriod, baseLeads]);
 
   const handleAskAi = (e: React.FormEvent) => {
     e.preventDefault();
@@ -920,19 +968,31 @@ export const ChartsSection: React.FC = () => {
           title="Click to view Project Deliverables"
         >
           <svg className="w-24 h-24 -rotate-90 group-hover:scale-105 transition-transform" viewBox="0 0 100 100">
-            {activeService.items.map((srv) => (
+            {activeService.items.length === 0 ? (
               <circle
-                key={srv.name}
                 cx="50"
                 cy="50"
                 r="38"
                 fill="transparent"
-                stroke={srv.color}
+                stroke="currentColor"
                 strokeWidth="16"
-                strokeDasharray={srv.dash}
-                strokeDashoffset={srv.offset}
+                className="text-slate-200 dark:text-slate-800"
               />
-            ))}
+            ) : (
+              activeService.items.map((srv) => (
+                <circle
+                  key={srv.name}
+                  cx="50"
+                  cy="50"
+                  r="38"
+                  fill="transparent"
+                  stroke={srv.color}
+                  strokeWidth="16"
+                  strokeDasharray={srv.dash}
+                  strokeDashoffset={srv.offset}
+                />
+              ))
+            )}
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
             <span className="text-[11px] font-extrabold tabular-nums text-slate-800 dark:text-white">
@@ -944,26 +1004,32 @@ export const ChartsSection: React.FC = () => {
 
         {/* Legend */}
         <div className="space-y-1 text-[9px]">
-          {activeService.items.map((srv) => (
-            <div
-              key={srv.name}
-              onClick={() => setActiveNav('Projects')}
-              className="flex items-center justify-between cursor-pointer hover:bg-sky-500/10 p-0.5 rounded transition-colors"
-            >
-              <div className="flex items-center gap-1.5 min-w-0">
-                <span
-                  className="w-2 h-2 rounded-full shrink-0"
-                  style={{ backgroundColor: srv.color }}
-                />
-                <span className="truncate text-slate-500 dark:text-slate-300">
-                  {srv.name}
+          {activeService.items.length === 0 ? (
+            <div className="text-center py-2 text-slate-400 italic text-[10px]">
+              No service revenue records
+            </div>
+          ) : (
+            activeService.items.map((srv) => (
+              <div
+                key={srv.name}
+                onClick={() => setActiveNav('Projects')}
+                className="flex items-center justify-between cursor-pointer hover:bg-sky-500/10 p-0.5 rounded transition-colors"
+              >
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ backgroundColor: srv.color }}
+                  />
+                  <span className="truncate text-slate-500 dark:text-slate-300">
+                    {srv.name}
+                  </span>
+                </div>
+                <span className="font-semibold tabular-nums shrink-0 text-slate-700 dark:text-slate-200">
+                  {formatMoney(srv.amount)} ({srv.percentage}%)
                 </span>
               </div>
-              <span className="font-semibold tabular-nums shrink-0 text-slate-700 dark:text-slate-200">
-                {formatMoney(srv.amount)} ({srv.percentage}%)
-              </span>
-            </div>
-          ))}
+            ))
+          )}
         </div>
 
         <div className="text-center pt-1.5 border-t border-sky-100/20 mt-1">
@@ -1039,19 +1105,31 @@ export const ChartsSection: React.FC = () => {
           title="Click to view Leads Database"
         >
           <svg className="w-24 h-24 -rotate-90 group-hover:scale-105 transition-transform" viewBox="0 0 100 100">
-            {activeLeads.items.map((src) => (
+            {activeLeads.items.length === 0 ? (
               <circle
-                key={src.name}
                 cx="50"
                 cy="50"
                 r="38"
                 fill="transparent"
-                stroke={src.color}
+                stroke="currentColor"
                 strokeWidth="16"
-                strokeDasharray={src.dash}
-                strokeDashoffset={src.offset}
+                className="text-slate-200 dark:text-slate-800"
               />
-            ))}
+            ) : (
+              activeLeads.items.map((src) => (
+                <circle
+                  key={src.name}
+                  cx="50"
+                  cy="50"
+                  r="38"
+                  fill="transparent"
+                  stroke={src.color}
+                  strokeWidth="16"
+                  strokeDasharray={src.dash}
+                  strokeDashoffset={src.offset}
+                />
+              ))
+            )}
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
             <span className="text-[11px] font-extrabold tabular-nums text-slate-800 dark:text-white">
@@ -1063,26 +1141,32 @@ export const ChartsSection: React.FC = () => {
 
         {/* Breakdown List */}
         <div className="space-y-1 text-[9px] mt-1">
-          {activeLeads.items.map((src) => (
-            <div
-              key={src.name}
-              onClick={() => setActiveNav('Leads')}
-              className="flex items-center justify-between cursor-pointer hover:bg-sky-500/10 p-0.5 rounded transition-colors"
-            >
-              <div className="flex items-center gap-1.5 min-w-0">
-                <span
-                  className="w-2 h-2 rounded-full shrink-0"
-                  style={{ backgroundColor: src.color }}
-                />
-                <span className="truncate text-slate-500 dark:text-slate-300">
-                  {src.name}
+          {activeLeads.items.length === 0 ? (
+            <div className="text-center py-2 text-slate-400 italic text-[10px]">
+              No lead source records
+            </div>
+          ) : (
+            activeLeads.items.map((src) => (
+              <div
+                key={src.name}
+                onClick={() => setActiveNav('Leads')}
+                className="flex items-center justify-between cursor-pointer hover:bg-sky-500/10 p-0.5 rounded transition-colors"
+              >
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ backgroundColor: src.color }}
+                  />
+                  <span className="truncate text-slate-500 dark:text-slate-300">
+                    {src.name}
+                  </span>
+                </div>
+                <span className="font-semibold tabular-nums shrink-0 text-slate-700 dark:text-slate-200">
+                  {src.percentage}% ({src.count})
                 </span>
               </div>
-              <span className="font-semibold tabular-nums shrink-0 text-slate-700 dark:text-slate-200">
-                {src.percentage}% ({src.count})
-              </span>
-            </div>
-          ))}
+            ))
+          )}
         </div>
 
         <div className="text-center pt-1.5 border-t border-sky-100/20 mt-1">
@@ -1115,40 +1199,71 @@ export const ChartsSection: React.FC = () => {
           </p>
 
           <div className="space-y-2 text-[10px]">
-            <div className="flex items-start gap-2">
-              <CheckCircle className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
-              <p className="leading-tight text-slate-600 dark:text-slate-300">
-                You are on track to hit your {goalState.compactAnnualGoal} goal. Keep your monthly revenue above {goalState.formattedMrrGoal}.
-              </p>
-            </div>
+            {liveCrm.invoices !== null && liveCrm.invoices.length === 0 && liveCrm.deals !== null && liveCrm.deals.length === 0 ? (
+              <>
+                <div className="flex items-start gap-2">
+                  <CheckCircle className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                  <p className="leading-tight text-slate-600 dark:text-slate-300">
+                    Workspace is clean and ready. Add new leads, deals, or invoices to start tracking real-time telemetry.
+                  </p>
+                </div>
+                <div className="flex items-start gap-2">
+                  <CheckCircle className="w-3.5 h-3.5 text-sky-500 shrink-0 mt-0.5" />
+                  <p className="leading-tight text-slate-600 dark:text-slate-300">
+                    <span className="font-semibold text-sky-600 dark:text-sky-400">0 deals at risk</span>. Sales pipeline is clear.
+                  </p>
+                </div>
+                <div className="flex items-start gap-2">
+                  <CheckCircle className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                  <p className="leading-tight text-slate-600 dark:text-slate-300">
+                    <span className="font-semibold text-emerald-600 dark:text-emerald-400">0 overdue tasks</span>. Sprints are up to date.
+                  </p>
+                </div>
+                <div className="flex items-start gap-2">
+                  <Zap className="w-3.5 h-3.5 text-teal-500 shrink-0 mt-0.5" />
+                  <p className="leading-tight text-slate-600 dark:text-slate-300">
+                    AI Business Assistant and automation agents are active.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-start gap-2">
+                  <CheckCircle className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                  <p className="leading-tight text-slate-600 dark:text-slate-300">
+                    You are on track to hit your {goalState.compactAnnualGoal} goal. Keep your monthly revenue above {goalState.formattedMrrGoal}.
+                  </p>
+                </div>
 
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
-              <p className="leading-tight text-slate-600 dark:text-slate-300">
-                <span className="font-semibold text-amber-600 dark:text-amber-400">3 deals</span> are at risk this week worth {currency.symbol}45,000.
-              </p>
-            </div>
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
+                  <p className="leading-tight text-slate-600 dark:text-slate-300">
+                    <span className="font-semibold text-amber-600 dark:text-amber-400">3 deals</span> are at risk this week worth {currency.symbol}45,000.
+                  </p>
+                </div>
 
-            <div className="flex items-start gap-2">
-              <Clock className="w-3.5 h-3.5 text-sky-500 shrink-0 mt-0.5" />
-              <p className="leading-tight text-slate-600 dark:text-slate-300">
-                <span className="font-semibold">7 clients</span> haven't been contacted in 7+ days.
-              </p>
-            </div>
+                <div className="flex items-start gap-2">
+                  <Clock className="w-3.5 h-3.5 text-sky-500 shrink-0 mt-0.5" />
+                  <p className="leading-tight text-slate-600 dark:text-slate-300">
+                    <span className="font-semibold">7 clients</span> haven't been contacted in 7+ days.
+                  </p>
+                </div>
 
-            <div className="flex items-start gap-2">
-              <XCircle className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5" />
-              <p className="leading-tight text-slate-600 dark:text-slate-300">
-                <span className="font-semibold text-rose-500">12 tasks</span> are overdue. Need your attention.
-              </p>
-            </div>
+                <div className="flex items-start gap-2">
+                  <XCircle className="w-3.5 h-3.5 text-rose-500 shrink-0 mt-0.5" />
+                  <p className="leading-tight text-slate-600 dark:text-slate-300">
+                    <span className="font-semibold text-rose-500">12 tasks</span> are overdue. Need your attention.
+                  </p>
+                </div>
 
-            <div className="flex items-start gap-2">
-              <Zap className="w-3.5 h-3.5 text-teal-500 shrink-0 mt-0.5" />
-              <p className="leading-tight text-slate-600 dark:text-slate-300">
-                AI Automation generated <span className="font-bold text-teal-600 dark:text-teal-400">{currency.symbol}18,450</span> this month.
-              </p>
-            </div>
+                <div className="flex items-start gap-2">
+                  <Zap className="w-3.5 h-3.5 text-teal-500 shrink-0 mt-0.5" />
+                  <p className="leading-tight text-slate-600 dark:text-slate-300">
+                    AI Automation generated <span className="font-bold text-teal-600 dark:text-teal-400">{currency.symbol}18,450</span> this month.
+                  </p>
+                </div>
+              </>
+            )}
 
             {/* Conversation replies if asked */}
             {aiMessages.map((msg, i) => (

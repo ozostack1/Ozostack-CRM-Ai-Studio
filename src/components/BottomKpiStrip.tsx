@@ -48,6 +48,7 @@ export const BottomKpiStrip: React.FC = () => {
   }, []);
 
   const dynamicSummaryKpis = useMemo(() => {
+    const isWiped = live.contacts !== null && live.contacts.length === 0;
     return BOTTOM_SUMMARY_KPIS.map((kpi) => {
       if (kpi.id === 'b1' && live.contacts !== null) {
         return { ...kpi, value: String(live.contacts.length), change: `${live.contacts.length} clients` };
@@ -58,9 +59,18 @@ export const BottomKpiStrip: React.FC = () => {
       if (kpi.id === 'b3' && live.team !== null) {
         return { ...kpi, value: String(live.team.length), change: `${live.team.length} members` };
       }
+      if (kpi.id === 'b4' && isWiped) {
+        return { ...kpi, value: '0', change: '0 global regions' };
+      }
       if (kpi.id === 'b5' && live.timeEntries !== null) {
         const totalHrs = live.timeEntries.reduce((sum: number, entry: any) => sum + (Number(entry.hours) || 0), 0);
         return { ...kpi, value: totalHrs.toLocaleString(), change: `${live.timeEntries.length} logged shifts` };
+      }
+      if (kpi.id === 'b6' && isWiped) {
+        return { ...kpi, value: '0.0 hrs', change: '0 response latency' };
+      }
+      if (kpi.id === 'b7' && isWiped) {
+        return { ...kpi, value: '0', change: '0 open tickets' };
       }
       if (kpi.id === 'b8' && live.contacts !== null) {
         const recurringCount = Math.round(live.contacts.length * 0.65);

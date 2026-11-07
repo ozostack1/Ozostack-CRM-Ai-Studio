@@ -242,6 +242,7 @@ export const MidLevelAnalytics: React.FC = () => {
       projects: parse('ozostack_projects'),
       tasks: parse('ozostack_tasks_v2'),
       team: parse('ozostack_team_members_v1'),
+      contacts: parse('ozostack_contacts_v1'),
     };
   };
 
@@ -349,7 +350,23 @@ export const MidLevelAnalytics: React.FC = () => {
     }));
   }, [live.team, teamPeriod]);
 
-  const activeCsat = CSAT_MAP[csatPeriod];
+  const activeCsat = useMemo(() => {
+    if (live.contacts !== null && live.contacts.length === 0) {
+      return {
+        score: '0.0/10',
+        reviewsCount: 0,
+        nps: '0.0 Clear',
+        breakdown: [
+          { stars: '5 Stars', percentage: 0 },
+          { stars: '4 Stars', percentage: 0 },
+          { stars: '3 Stars', percentage: 0 },
+          { stars: '2 Stars', percentage: 0 },
+          { stars: '1 Star', percentage: 0 },
+        ],
+      };
+    }
+    return CSAT_MAP[csatPeriod];
+  }, [live.contacts, csatPeriod]);
 
   // Notifications state via unified service (scoped to authenticated user)
   const {
@@ -523,19 +540,31 @@ export const MidLevelAnalytics: React.FC = () => {
           title="Click to view all Projects"
         >
           <svg className="w-24 h-24 -rotate-90 group-hover:scale-105 transition-transform" viewBox="0 0 100 100">
-            {activeProjects.items.map((item) => (
+            {activeProjects.items.length === 0 ? (
               <circle
-                key={item.name}
                 cx="50"
                 cy="50"
                 r="38"
                 fill="transparent"
-                stroke={item.color}
+                stroke="currentColor"
                 strokeWidth="15"
-                strokeDasharray={item.dash}
-                strokeDashoffset={item.offset}
+                className="text-slate-200 dark:text-slate-800"
               />
-            ))}
+            ) : (
+              activeProjects.items.map((item) => (
+                <circle
+                  key={item.name}
+                  cx="50"
+                  cy="50"
+                  r="38"
+                  fill="transparent"
+                  stroke={item.color}
+                  strokeWidth="15"
+                  strokeDasharray={item.dash}
+                  strokeDashoffset={item.offset}
+                />
+              ))
+            )}
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
             <span className="text-base font-extrabold tabular-nums text-slate-800 dark:text-white">
@@ -654,19 +683,31 @@ export const MidLevelAnalytics: React.FC = () => {
           title="Click to view all Tasks"
         >
           <svg className="w-24 h-24 -rotate-90 group-hover:scale-105 transition-transform" viewBox="0 0 100 100">
-            {activeTasks.items.map((item) => (
+            {activeTasks.items.length === 0 ? (
               <circle
-                key={item.name}
                 cx="50"
                 cy="50"
                 r="38"
                 fill="transparent"
-                stroke={item.color}
+                stroke="currentColor"
                 strokeWidth="15"
-                strokeDasharray={item.dash}
-                strokeDashoffset={item.offset}
+                className="text-slate-200 dark:text-slate-800"
               />
-            ))}
+            ) : (
+              activeTasks.items.map((item) => (
+                <circle
+                  key={item.name}
+                  cx="50"
+                  cy="50"
+                  r="38"
+                  fill="transparent"
+                  stroke={item.color}
+                  strokeWidth="15"
+                  strokeDasharray={item.dash}
+                  strokeDashoffset={item.offset}
+                />
+              ))
+            )}
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
             <span className="text-base font-extrabold tabular-nums text-slate-800 dark:text-white">

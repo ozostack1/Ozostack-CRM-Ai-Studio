@@ -35,6 +35,23 @@ export function formatCompact(val: number, customSymbol?: string): string {
 
 export { formatMoney };
 
+function getLiveRevenueAmount(): number | null {
+  try {
+    const rawInvoices = localStorage.getItem('ozostack_invoices_v1');
+    if (rawInvoices !== null) {
+      const invoices = JSON.parse(rawInvoices);
+      if (Array.isArray(invoices)) {
+        if (invoices.length === 0) return 0;
+        return invoices.reduce((sum: number, inv: any) => {
+          const val = typeof inv.amount === 'number' ? inv.amount : parseFloat(String(inv.amount || 0).replace(/[^0-9.]/g, '')) || 0;
+          return sum + val;
+        }, 0);
+      }
+    }
+  } catch {}
+  return null;
+}
+
 export function loadRevenueGoal(): RevenueGoal {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -82,16 +99,16 @@ export function useRevenueGoal() {
   useEffect(() => {
     refresh();
     const handleCustomChange = () => refresh();
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY) refresh();
-    };
+    const handleStorageChange = () => refresh();
 
     window.addEventListener(EVENT_NAME, handleCustomChange);
     window.addEventListener('ozostack-currency-changed', handleCustomChange);
+    window.addEventListener('ozostack-crm-config-changed', handleCustomChange);
     window.addEventListener('storage', handleStorageChange);
     return () => {
       window.removeEventListener(EVENT_NAME, handleCustomChange);
       window.removeEventListener('ozostack-currency-changed', handleCustomChange);
+      window.removeEventListener('ozostack-crm-config-changed', handleCustomChange);
       window.removeEventListener('storage', handleStorageChange);
     };
   }, [refresh]);
@@ -107,12 +124,15 @@ export function useRevenueGoal() {
   }, []);
 
   const computed = useMemo(() => {
+    const liveRev = getLiveRevenueAmount();
+    const isWiped = liveRev === 0;
     const annualGoal = goal.annualGoal;
     const mrrGoal = Math.round(annualGoal / 12);
     const dailyGoal = Math.round(annualGoal / goal.totalDays);
-    const current = goal.currentAmount;
+    const current = liveRev !== null ? liveRev : goal.currentAmount;
+    const todayAmount = isWiped ? 0 : goal.todayAmount;
     const remaining = Math.max(0, annualGoal - current);
-    const percentage = Math.min(100, Math.round((current / annualGoal) * 10000) / 100);
+    const percentage = annualGoal > 0 ? Math.min(100, Math.round((current / annualGoal) * 10000) / 100) : 0;
 
     return {
       annualGoal,
@@ -129,8 +149,8 @@ export function useRevenueGoal() {
       formattedCurrent: formatCurrency(current),
       formattedDailyGoal: formatCurrency(dailyGoal),
       thisMonthAchieved: `${formatCurrency(current)} / ${formatCurrency(mrrGoal)}`,
-      todayAchieved: `${formatCurrency(goal.todayAmount)} / ${formatCurrency(dailyGoal)}`,
-      daysPassed: `${goal.daysPassed} / ${goal.totalDays}`,
+      todayAchieved: `${formatCurrency(todayAmount)} / ${formatCurrency(dailyGoal)}`,
+      daysPassed: isWiped ? '0 / 365' : `${goal.daysPassed} / ${goal.totalDays}`,
     };
   }, [goal]);
 

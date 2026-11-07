@@ -101,10 +101,22 @@ export const MetricCards: React.FC = () => {
       projects: readKey('ozostack_projects'),
       contacts: readKey('ozostack_contacts_v1'),
       followUps: readKey('ozostack_followups_v2'),
+      invoices: readKey('ozostack_invoices_v1'),
+      team: readKey('ozostack_team_members_v1'),
     };
   };
 
   const [liveData, setLiveData] = useState(readLiveStorage);
+
+  const isRevWiped = liveData.invoices !== null && liveData.invoices.length === 0;
+  const isDataWiped = isRevWiped || (liveData.deals !== null && liveData.deals.length === 0 && liveData.leads !== null && liveData.leads.length === 0);
+  const revAmount = isRevWiped ? 0 : 215420;
+  const todayAmount = isRevWiped ? 0 : 7540;
+  const mrrAmount = isRevWiped ? 0 : 68450;
+  const profitAmount = isRevWiped ? 0 : 47850;
+  const cashAmount = isRevWiped ? 0 : 32650;
+  const grossMarginVal = isRevWiped ? '0.0%' : '42.6%';
+  const activeClientsVal = liveData.contacts ? liveData.contacts.length : (isDataWiped ? 0 : 63);
 
   useEffect(() => {
     const sync = () => setLiveData(readLiveStorage());
@@ -170,18 +182,38 @@ export const MetricCards: React.FC = () => {
         const count = liveData.tasks.filter((t: any) => t.status === 'Completed').length;
         return { ...kpi, value: String(count), change: `${count} completed` };
       }
-      return kpi;
-    });
-  }, [liveData]);
-
-  const dynamicTopRowKpis = useMemo(() => {
-    return TOP_ROW_KPIS.map((kpi) => {
-      if (kpi.id === 'active-clients' && liveData.contacts !== null) {
-        return { ...kpi, value: String(liveData.contacts.length), change: `${liveData.contacts.length} clients` };
+      if (kpi.id === 'team-productivity') {
+        const count = liveData.team ? liveData.team.length : (isDataWiped ? 0 : 22);
+        return { ...kpi, value: count > 0 ? '87%' : '0%', change: count > 0 ? '▲ 7%' : '0 active' };
+      }
+      if (kpi.id === 'client-satisfaction') {
+        const count = liveData.contacts ? liveData.contacts.length : (isDataWiped ? 0 : 63);
+        return { ...kpi, value: count > 0 ? '9.3/10' : '0.0/10', change: count > 0 ? '▲ 0.6' : '0 reviews' };
+      }
+      if (kpi.id === 'avg-delivery-time') {
+        return { ...kpi, value: isDataWiped ? '0 Days' : '14.6 Days', change: isDataWiped ? '0 completed' : '▼ 2.1' };
       }
       return kpi;
     });
-  }, [liveData]);
+  }, [liveData, isDataWiped]);
+
+  const dynamicTopRowKpis = useMemo(() => {
+    return TOP_ROW_KPIS.map((kpi) => {
+      if (kpi.id === 'active-clients') {
+        const count = liveData.contacts ? liveData.contacts.length : (isDataWiped ? 0 : 63);
+        return { ...kpi, value: String(count), change: `${count} clients` };
+      }
+      if (isRevWiped) {
+        if (kpi.id === 'today-revenue' || kpi.id === 'monthly-revenue' || kpi.id === 'mrr' || kpi.id === 'profit' || kpi.id === 'cash-flow') {
+          return { ...kpi, value: `${currency.symbol}0`, change: '0.0% MoM' };
+        }
+        if (kpi.id === 'gross-margin') {
+          return { ...kpi, value: '0.0%', change: '0.0%' };
+        }
+      }
+      return kpi;
+    });
+  }, [liveData, isDataWiped, isRevWiped, currency.symbol]);
 
   const cardBg = isLight
     ? 'bg-white border-sky-100/80 shadow-xs hover:border-sky-300'
@@ -657,23 +689,25 @@ export const MetricCards: React.FC = () => {
 
                 <div className="flex items-baseline gap-3 my-1">
                   <h3 className="text-3xl sm:text-4xl font-black tracking-tight text-slate-900 dark:text-white tabular-nums">
-                    {currency.symbol}215,420
+                    {currency.symbol}{revAmount.toLocaleString()}
                   </h3>
-                  <span className="text-xs text-slate-400 font-semibold">vs {currency.symbol}167K last month</span>
+                  <span className="text-xs text-slate-400 font-semibold">
+                    {isRevWiped ? `vs ${currency.symbol}0 last month` : `vs ${currency.symbol}167K last month`}
+                  </span>
                 </div>
 
                 {/* Sub-metrics pill row */}
                 <div className="flex items-center gap-2 mt-3 flex-wrap">
                   <div className="px-2.5 py-1 rounded-lg bg-sky-500/10 text-sky-600 dark:text-sky-300 font-medium text-[11px] flex items-center gap-1.5">
                     <span className="text-slate-400">Today:</span>
-                    <strong className="font-bold">{currency.symbol}7,540</strong>
-                    <span className="text-emerald-500 font-bold">▲ 15.8%</span>
+                    <strong className="font-bold">{currency.symbol}{todayAmount.toLocaleString()}</strong>
+                    <span className="text-emerald-500 font-bold">{isRevWiped ? '0.0%' : '▲ 15.8%'}</span>
                   </div>
 
                   <div className="px-2.5 py-1 rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-300 font-medium text-[11px] flex items-center gap-1.5">
                     <span className="text-slate-400">MRR:</span>
-                    <strong className="font-bold">{currency.symbol}68,450</strong>
-                    <span className="text-emerald-500 font-bold">▲ 12.4%</span>
+                    <strong className="font-bold">{currency.symbol}{mrrAmount.toLocaleString()}</strong>
+                    <span className="text-emerald-500 font-bold">{isRevWiped ? '0.0%' : '▲ 12.4%'}</span>
                   </div>
                 </div>
               </div>
@@ -683,16 +717,16 @@ export const MetricCards: React.FC = () => {
                 <svg className="w-full h-12 overflow-visible" viewBox="0 0 300 45">
                   <defs>
                     <linearGradient id="bentoRevGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.3" />
+                      <stop offset="0%" stopColor="#38bdf8" stopOpacity={isRevWiped ? 0.05 : 0.3} />
                       <stop offset="100%" stopColor="#38bdf8" stopOpacity="0" />
                     </linearGradient>
                   </defs>
                   <path
-                    d="M 0 38 Q 40 35, 80 28 T 160 20 T 240 10 L 300 4 L 300 45 L 0 45 Z"
+                    d={isRevWiped ? "M 0 44 L 300 44 L 300 45 L 0 45 Z" : "M 0 38 Q 40 35, 80 28 T 160 20 T 240 10 L 300 4 L 300 45 L 0 45 Z"}
                     fill="url(#bentoRevGrad)"
                   />
                   <path
-                    d="M 0 38 Q 40 35, 80 28 T 160 20 T 240 10 L 300 4"
+                    d={isRevWiped ? "M 0 44 L 300 44" : "M 0 38 Q 40 35, 80 28 T 160 20 T 240 10 L 300 4"}
                     fill="none"
                     stroke="#0284c7"
                     strokeWidth="2.5"
@@ -783,10 +817,10 @@ export const MetricCards: React.FC = () => {
                 </div>
                 <div className="my-1.5">
                   <span className="text-lg font-black text-slate-900 dark:text-white tabular-nums">
-                    {currency.symbol}47,850
+                    {currency.symbol}{profitAmount.toLocaleString()}
                   </span>
                 </div>
-                <span className="text-[10px] font-bold text-emerald-500">▲ 22.1% MoM</span>
+                <span className="text-[10px] font-bold text-emerald-500">{isRevWiped ? '0.0% MoM' : '▲ 22.1% MoM'}</span>
               </div>
 
               <div
@@ -800,10 +834,10 @@ export const MetricCards: React.FC = () => {
                 </div>
                 <div className="my-1.5">
                   <span className="text-lg font-black text-slate-900 dark:text-white tabular-nums">
-                    {currency.symbol}32,650
+                    {currency.symbol}{cashAmount.toLocaleString()}
                   </span>
                 </div>
-                <span className="text-[10px] font-bold text-emerald-500">▲ 18.7% MoM</span>
+                <span className="text-[10px] font-bold text-emerald-500">{isRevWiped ? '0.0% MoM' : '▲ 18.7% MoM'}</span>
               </div>
 
               <div
@@ -817,10 +851,10 @@ export const MetricCards: React.FC = () => {
                 </div>
                 <div className="my-1.5">
                   <span className="text-lg font-black text-slate-900 dark:text-white tabular-nums">
-                    42.6%
+                    {grossMarginVal}
                   </span>
                 </div>
-                <span className="text-[10px] font-bold text-emerald-500">▲ 5.3% Healthy</span>
+                <span className="text-[10px] font-bold text-emerald-500">{isRevWiped ? '0.0%' : '▲ 5.3% Healthy'}</span>
               </div>
 
               <div
@@ -834,10 +868,10 @@ export const MetricCards: React.FC = () => {
                 </div>
                 <div className="my-1.5">
                   <span className="text-lg font-black text-slate-900 dark:text-white tabular-nums">
-                    63
+                    {activeClientsVal}
                   </span>
                 </div>
-                <span className="text-[10px] font-bold text-sky-500">▲ 7 new accounts</span>
+                <span className="text-[10px] font-bold text-sky-500">{activeClientsVal} accounts</span>
               </div>
             </div>
           </div>
@@ -1104,12 +1138,12 @@ export const MetricCards: React.FC = () => {
                     stroke="#10b981"
                     strokeWidth="12"
                     strokeDasharray="251.2"
-                    strokeDashoffset={251.2 * (1 - 0.426)}
+                    strokeDashoffset={251.2 * (1 - (isRevWiped ? 0 : 0.426))}
                     strokeLinecap="round"
                   />
                 </svg>
                 <div className="absolute inset-0 flex items-center justify-center rotate-90 font-black text-xs text-emerald-500">
-                  42.6%
+                  {grossMarginVal}
                 </div>
               </div>
               <div className="min-w-0">
@@ -1117,9 +1151,9 @@ export const MetricCards: React.FC = () => {
                   Gross Profit Margin
                 </span>
                 <span className="text-base font-extrabold text-slate-900 dark:text-white block mt-0.5">
-                  {currency.symbol}47,850
+                  {currency.symbol}{profitAmount.toLocaleString()}
                 </span>
-                <span className="text-[10px] text-emerald-500 font-semibold">▲ 5.3% vs target</span>
+                <span className="text-[10px] text-emerald-500 font-semibold">{isRevWiped ? '0.0% vs target' : '▲ 5.3% vs target'}</span>
               </div>
             </div>
 
@@ -1147,12 +1181,12 @@ export const MetricCards: React.FC = () => {
                     stroke="#6366f1"
                     strokeWidth="12"
                     strokeDasharray="251.2"
-                    strokeDashoffset={251.2 * (1 - 0.282)}
+                    strokeDashoffset={251.2 * (1 - (isDataWiped ? 0 : 0.282))}
                     strokeLinecap="round"
                   />
                 </svg>
                 <div className="absolute inset-0 flex items-center justify-center rotate-90 font-black text-xs text-indigo-500">
-                  28.2%
+                  {isDataWiped ? '0.0%' : '28.2%'}
                 </div>
               </div>
               <div className="min-w-0">
@@ -1160,9 +1194,9 @@ export const MetricCards: React.FC = () => {
                   Deal Win Rate
                 </span>
                 <span className="text-base font-extrabold text-slate-900 dark:text-white block mt-0.5">
-                  11 Won / 4 Lost
+                  {isDataWiped ? '0 Won / 0 Lost' : '11 Won / 4 Lost'}
                 </span>
-                <span className="text-[10px] text-indigo-500 font-semibold">▲ 6.3% conversion</span>
+                <span className="text-[10px] text-indigo-500 font-semibold">{isDataWiped ? '0.0% conversion' : '▲ 6.3% conversion'}</span>
               </div>
             </div>
 
@@ -1190,12 +1224,12 @@ export const MetricCards: React.FC = () => {
                     stroke="#f59e0b"
                     strokeWidth="12"
                     strokeDasharray="251.2"
-                    strokeDashoffset={251.2 * (1 - 0.87)}
+                    strokeDashoffset={251.2 * (1 - (isDataWiped ? 0 : 0.87))}
                     strokeLinecap="round"
                   />
                 </svg>
                 <div className="absolute inset-0 flex items-center justify-center rotate-90 font-black text-xs text-amber-500">
-                  87%
+                  {isDataWiped ? '0%' : '87%'}
                 </div>
               </div>
               <div className="min-w-0">
@@ -1203,9 +1237,9 @@ export const MetricCards: React.FC = () => {
                   Team Productivity
                 </span>
                 <span className="text-base font-extrabold text-slate-900 dark:text-white block mt-0.5">
-                  128 Tasks Done
+                  {isDataWiped ? '0 Tasks Done' : '128 Tasks Done'}
                 </span>
-                <span className="text-[10px] text-amber-500 font-semibold">▲ 7% efficiency</span>
+                <span className="text-[10px] text-amber-500 font-semibold">{isDataWiped ? '0% efficiency' : '▲ 7% efficiency'}</span>
               </div>
             </div>
           </div>
