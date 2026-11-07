@@ -1,0 +1,6 @@
+{
+  "name": "OzoStack CRM - CEO Command Center",
+  "description": "Pixel-perfect CEO command center CRM dashboard with responsive navigation, comprehensive business intelligence, and white and sky blue theme.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
