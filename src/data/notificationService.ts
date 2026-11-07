@@ -195,9 +195,9 @@ export function loadNotifications(): NotificationItem[] {
     }
 
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
+    if (raw !== null) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
+      if (Array.isArray(parsed)) {
         return parsed;
       }
     }
@@ -399,9 +399,9 @@ export function syncUpcomingEventsFromCalendar(): void {
     let calendarEvents: CalendarEvent[] = CALENDAR_EVENTS;
     try {
       const raw = localStorage.getItem('ozostack_calendar_events_v3');
-      if (raw) {
+      if (raw !== null) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) calendarEvents = parsed;
+        if (Array.isArray(parsed)) calendarEvents = parsed;
       }
     } catch {
       /* ignore */
@@ -440,9 +440,17 @@ export function syncUpcomingEventsFromCalendar(): void {
     let followUps: FollowUp[] = INITIAL_FOLLOW_UPS;
     try {
       const raw = localStorage.getItem('ozostack_followups_v2');
-      if (raw) {
+      if (raw !== null) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) followUps = parsed;
+        if (Array.isArray(parsed)) followUps = parsed;
+      }
+      // If leads are wiped, also suppress follow-up notifications
+      const rawLeads = localStorage.getItem('ozostack_leads_v2');
+      if (rawLeads !== null) {
+        const parsedLeads = JSON.parse(rawLeads);
+        if (Array.isArray(parsedLeads) && parsedLeads.length === 0) {
+          followUps = [];
+        }
       }
     } catch {
       /* ignore */
@@ -503,11 +511,13 @@ export function useNotifications(user?: { name?: string; email?: string } | null
 
     window.addEventListener(EVENT_NAME, handleCustomChange);
     window.addEventListener('storage', handleStorageChange);
+    window.addEventListener('ozostack-crm-config-changed', handleCustomChange);
     window.addEventListener('focus', handleCustomChange);
 
     return () => {
       window.removeEventListener(EVENT_NAME, handleCustomChange);
       window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('ozostack-crm-config-changed', handleCustomChange);
       window.removeEventListener('focus', handleCustomChange);
     };
   }, [refresh]);

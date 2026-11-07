@@ -129,7 +129,7 @@ export const SEED_ROLES: Role[] = [
     permissions: {
       ...grant(['Dashboard', 'Projects', 'Tasks'], ['view']),
       Team: [...ACTIONS],
-      Payroll: ['view', 'edit', 'export', 'approve'],
+      Payroll: ['view', 'edit', 'delete', 'export', 'approve'],
       ...grant(['Events & Calendar', 'Documents', 'Time Tracking', 'To Do & Notes'], ['view', 'create', 'edit', 'delete']),
     },
     isSystem: true,

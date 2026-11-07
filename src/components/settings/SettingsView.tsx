@@ -71,6 +71,12 @@ import {
   INITIAL_LEAVE_REQUESTS,
   INITIAL_JOB_REQUISITIONS,
 } from '../team/teamMockData';
+import {
+  INITIAL_PAYROLL_RECORDS,
+  INITIAL_PAY_RUNS,
+  INITIAL_REIMBURSEMENT_CLAIMS,
+} from '../payroll/payrollMockData';
+import { INITIAL_NOTIFICATIONS } from '../../data/notificationService';
 import { CrmSetupSection } from './CrmSetupSection';
 import { LeadFormBuilderSection } from './LeadFormBuilderSection';
 
@@ -217,6 +223,10 @@ export const SettingsView: React.FC = () => {
         localStorage.setItem('ozostack_leave_requests_v1', JSON.stringify(INITIAL_LEAVE_REQUESTS));
         localStorage.setItem('ozostack_jobs_v1', JSON.stringify(INITIAL_JOB_REQUISITIONS));
         localStorage.setItem('ozostack_revenue_transactions_v1', JSON.stringify(INITIAL_REVENUE_TRANSACTIONS));
+        localStorage.setItem('ozostack_payroll_records_v1', JSON.stringify(INITIAL_PAYROLL_RECORDS));
+        localStorage.setItem('ozostack_pay_runs_v1', JSON.stringify(INITIAL_PAY_RUNS));
+        localStorage.setItem('ozostack_reimbursements_v1', JSON.stringify(INITIAL_REIMBURSEMENT_CLAIMS));
+        localStorage.setItem('ozostack_notifications_v4', JSON.stringify(INITIAL_NOTIFICATIONS));
       } catch (err) {
         console.error('Reset mock data failed', err);
       }
@@ -249,6 +259,10 @@ export const SettingsView: React.FC = () => {
         localStorage.setItem('ozostack_leave_requests_v1', JSON.stringify([]));
         localStorage.setItem('ozostack_jobs_v1', JSON.stringify([]));
         localStorage.setItem('ozostack_revenue_transactions_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_payroll_records_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_pay_runs_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_reimbursements_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_notifications_v4', JSON.stringify([]));
       } catch (err) {
         console.error('Wipe CRM data failed', err);
       }
@@ -1829,8 +1843,8 @@ export const SettingsView: React.FC = () => {
             <div className="text-xs text-slate-500 dark:text-slate-400 space-y-2">
               <p>
                 {dangerModalMode === 'reset'
-                  ? 'You are about to restore all initial mock data across Leads, Deals, Tasks, Calendar Events, Projects, Employees, Invoices, Contacts, and Payments. All current modifications will be replaced with default data.'
-                  : 'You are about to permanently wipe all records across Leads, Deals, Tasks, Calendar Events, Projects, Employees, Invoices, Contacts, and Payments. All tables will be completely empty.'}
+                  ? 'You are about to restore all initial mock data across Leads, Deals, Tasks, Calendar Events, Projects, Employees, Payroll, Notifications, Invoices, Contacts, and Payments. All current modifications will be replaced with default data.'
+                  : 'You are about to permanently wipe all records across Leads, Deals, Tasks, Calendar Events, Projects, Employees, Payroll, Notifications, Invoices, Contacts, and Payments. All tables will be completely empty.'}
               </p>
               <p className="font-semibold text-slate-700 dark:text-slate-200">
                 Please enter your login password or administrator password to confirm:

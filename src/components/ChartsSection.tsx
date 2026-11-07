@@ -536,7 +536,7 @@ export const ChartsSection: React.FC = () => {
       if (liveCrm.leads.length === 0 && liveCrm.deals.length === 0) {
         return {
           stages: basePipeline.stages.map((s) => ({ ...s, count: 0, percentage: '0%' })),
-          conversion: '0.0% ($0)',
+          conversion: `0.0% (${currency.symbol}0)`,
         };
       }
       const totalLeads = liveCrm.leads.length;
@@ -1199,7 +1199,7 @@ export const ChartsSection: React.FC = () => {
           </p>
 
           <div className="space-y-2 text-[10px]">
-            {liveCrm.invoices !== null && liveCrm.invoices.length === 0 && liveCrm.deals !== null && liveCrm.deals.length === 0 ? (
+            {(liveCrm.invoices !== null && liveCrm.invoices.length === 0) || (liveCrm.deals !== null && liveCrm.deals.length === 0 && liveCrm.leads !== null && liveCrm.leads.length === 0) ? (
               <>
                 <div className="flex items-start gap-2">
                   <CheckCircle className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />

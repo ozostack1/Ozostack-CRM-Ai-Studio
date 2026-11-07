@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   Banknote,
   DollarSign,
@@ -11,6 +11,7 @@ import {
   Download,
   FileSpreadsheet,
   Plus,
+  Trash2,
   CheckCircle2,
   AlertCircle,
   TrendingUp,
@@ -47,6 +48,50 @@ import { useSystemCurrency } from '../../data/currencyService';
 
 type ActivePayrollTab = 'cycles' | 'roster' | 'taxes' | 'reimbursements';
 
+const STORAGE_PAYROLL_RECORDS = 'ozostack_payroll_records_v1';
+const STORAGE_PAY_RUNS = 'ozostack_pay_runs_v1';
+const STORAGE_REIMBURSEMENTS = 'ozostack_reimbursements_v1';
+const STORAGE_TEAM_MEMBERS = 'ozostack_team_members_v1';
+
+const loadPayrollRecords = (): EmployeePayrollRecord[] => {
+  try {
+    const saved = localStorage.getItem(STORAGE_PAYROLL_RECORDS);
+    if (saved !== null) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    }
+    // If team members is explicitly empty, payroll roster should also be empty
+    const teamRaw = localStorage.getItem(STORAGE_TEAM_MEMBERS);
+    if (teamRaw !== null) {
+      const parsedTeam = JSON.parse(teamRaw);
+      if (Array.isArray(parsedTeam) && parsedTeam.length === 0) return [];
+    }
+  } catch {}
+  return INITIAL_PAYROLL_RECORDS;
+};
+
+const loadPayRuns = (): PayRunCycle[] => {
+  try {
+    const saved = localStorage.getItem(STORAGE_PAY_RUNS);
+    if (saved !== null) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return INITIAL_PAY_RUNS;
+};
+
+const loadClaims = (): ReimbursementClaim[] => {
+  try {
+    const saved = localStorage.getItem(STORAGE_REIMBURSEMENTS);
+    if (saved !== null) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return INITIAL_REIMBURSEMENT_CLAIMS;
+};
+
 export const PayrollView: React.FC = () => {
   const { theme, setActiveNav } = useTheme();
   const isLight = theme === 'white-sky';
@@ -60,10 +105,48 @@ export const PayrollView: React.FC = () => {
 
   // Master States (reactive scoping for the signed-in user)
   const [activeTab, setActiveTab] = useState<ActivePayrollTab>('roster');
-  const [allPayrollRecords, setPayrollRecords] = useState<EmployeePayrollRecord[]>(INITIAL_PAYROLL_RECORDS);
-  const [payRuns, setPayRuns] = useState<PayRunCycle[]>(INITIAL_PAY_RUNS);
-  const [allClaims, setClaims] = useState<ReimbursementClaim[]>(INITIAL_REIMBURSEMENT_CLAIMS);
+  const [allPayrollRecords, setPayrollRecords] = useState<EmployeePayrollRecord[]>(loadPayrollRecords);
+  const [payRuns, setPayRuns] = useState<PayRunCycle[]>(loadPayRuns);
+  const [allClaims, setClaims] = useState<ReimbursementClaim[]>(loadClaims);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const savePayrollRecords = useCallback((records: EmployeePayrollRecord[]) => {
+    setPayrollRecords(records);
+    try {
+      localStorage.setItem(STORAGE_PAYROLL_RECORDS, JSON.stringify(records));
+      window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
+    } catch {}
+  }, []);
+
+  const savePayRuns = useCallback((runs: PayRunCycle[]) => {
+    setPayRuns(runs);
+    try {
+      localStorage.setItem(STORAGE_PAY_RUNS, JSON.stringify(runs));
+      window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
+    } catch {}
+  }, []);
+
+  const saveClaims = useCallback((claimsList: ReimbursementClaim[]) => {
+    setClaims(claimsList);
+    try {
+      localStorage.setItem(STORAGE_REIMBURSEMENTS, JSON.stringify(claimsList));
+      window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    const sync = () => {
+      setPayrollRecords(loadPayrollRecords());
+      setPayRuns(loadPayRuns());
+      setClaims(loadClaims());
+    };
+    window.addEventListener('storage', sync);
+    window.addEventListener('ozostack-crm-config-changed', sync);
+    return () => {
+      window.removeEventListener('storage', sync);
+      window.removeEventListener('ozostack-crm-config-changed', sync);
+    };
+  }, []);
 
   const payrollRecords = useMemo(() => scopeFilter(allPayrollRecords, byEmployee), [allPayrollRecords, scopeFilter]);
   const claims = useMemo(() => scopeFilter(allClaims, byEmployee), [allClaims, scopeFilter]);
@@ -158,7 +241,8 @@ export const PayrollView: React.FC = () => {
 
   const handleSaveAdjust = (updated: EmployeePayrollRecord) => {
     if (!allow('edit')) return;
-    setPayrollRecords((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+    const next = allPayrollRecords.map((r) => (r.id === updated.id ? updated : r));
+    savePayrollRecords(next);
     showToast(`Updated payroll terms for ${updated.name}. Net pay recalculated: ${currency.symbol}${updated.netPay.toLocaleString()}`);
   };
 
@@ -166,7 +250,8 @@ export const PayrollView: React.FC = () => {
     if (!allow('edit')) return;
     const nextStatus: PayrollItemStatus = record.status === 'On Hold' ? 'Pending' : 'On Hold';
     const updated: EmployeePayrollRecord = { ...record, status: nextStatus };
-    setPayrollRecords((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+    const next = allPayrollRecords.map((r) => (r.id === updated.id ? updated : r));
+    savePayrollRecords(next);
     showToast(
       nextStatus === 'On Hold'
         ? `Payment on hold for ${record.name}. Direct deposit locked.`
@@ -182,61 +267,88 @@ export const PayrollView: React.FC = () => {
 
   const handleExecutePayRun = (cycleId: string, payDate: string, fundingAccount: string) => {
     if (!allow('approve')) return;
-    setPayRuns((prev) =>
-      prev.map((c) =>
-        c.id === cycleId
-          ? {
-              ...c,
-              status: 'Paid',
-              payDate,
-              fundingAccount,
-            }
-          : c
-      )
+    const nextPayRuns = payRuns.map((c) =>
+      c.id === cycleId
+        ? {
+            ...c,
+            status: 'Paid' as const,
+            payDate,
+            fundingAccount,
+          }
+        : c
     );
+    savePayRuns(nextPayRuns);
     // Mark all active pending records as Paid
-    setPayrollRecords((prev) =>
-      prev.map((r) => (r.status === 'Pending' ? { ...r, status: 'Paid', payDate } : r))
-    );
+    const nextRecords = allPayrollRecords.map((r) => (r.status === 'Pending' ? { ...r, status: 'Paid' as const, payDate } : r));
+    savePayrollRecords(nextRecords);
     showToast(`Pay Run executed successfully! ${currency.symbol}${totalMonthlyNet.toLocaleString()} ACH batch transmitted.`);
   };
 
   const handleApproveClaim = (claim: ReimbursementClaim) => {
     if (!allow('approve')) return;
-    setClaims((prev) =>
-      prev.map((c) => (c.id === claim.id ? { ...c, status: 'Approved' } : c))
-    );
+    const nextClaims = allClaims.map((c) => (c.id === claim.id ? { ...c, status: 'Approved' as const } : c));
+    saveClaims(nextClaims);
     // Automatically credit to employee reimbursement in active payroll
-    setPayrollRecords((prev) =>
-      prev.map((r) => {
-        if (r.employeeId === claim.employeeId) {
-          const newReimbursement = r.reimbursement + claim.amount;
-          const newTotalGross = r.baseGross + r.bonus + newReimbursement + r.overtimePay;
-          const newNet = newTotalGross - r.totalDeductions;
-          return {
-            ...r,
-            reimbursement: newReimbursement,
-            totalGross: newTotalGross,
-            netPay: newNet,
-          };
-        }
-        return r;
-      })
-    );
+    const nextRecords = allPayrollRecords.map((r) => {
+      if (r.employeeId === claim.employeeId) {
+        const newReimbursement = r.reimbursement + claim.amount;
+        const newTotalGross = r.baseGross + r.bonus + newReimbursement + r.overtimePay;
+        const newNet = newTotalGross - r.totalDeductions;
+        return {
+          ...r,
+          reimbursement: newReimbursement,
+          totalGross: newTotalGross,
+          netPay: newNet,
+        };
+      }
+      return r;
+    });
+    savePayrollRecords(nextRecords);
     showToast(`Approved claim "${claim.title}". Added ${currency.symbol}${claim.amount.toLocaleString()} to ${claim.employeeName}'s next paycheck.`);
   };
 
   const handleRejectClaim = (claimId: string, title: string) => {
     if (!allow('approve')) return;
-    setClaims((prev) =>
-      prev.map((c) => (c.id === claimId ? { ...c, status: 'Rejected' } : c))
-    );
+    const nextClaims = allClaims.map((c) => (c.id === claimId ? { ...c, status: 'Rejected' as const } : c));
+    saveClaims(nextClaims);
     showToast(`Rejected reimbursement claim "${title}".`);
   };
 
   const handleAddClaim = (newClaim: ReimbursementClaim) => {
-    setClaims((prev) => [newClaim, ...prev]);
+    const next = [newClaim, ...allClaims];
+    saveClaims(next);
     showToast(`Submitted expense claim for ${newClaim.employeeName} (${currency.symbol}${newClaim.amount.toFixed(2)}).`);
+  };
+
+  const handleDeleteRecord = (recordId: string, name: string) => {
+    if (!allow('delete')) return;
+    if (!window.confirm(`Are you sure you want to remove ${name} from the payroll roster?`)) return;
+    const next = allPayrollRecords.filter((r) => r.id !== recordId);
+    savePayrollRecords(next);
+    showToast(`Deleted payroll record for ${name}.`);
+  };
+
+  const handleClearAllPayroll = () => {
+    if (!allow('delete')) return;
+    if (!window.confirm('Are you sure you want to delete all employee payroll records? This will clear the entire roster.')) return;
+    savePayrollRecords([]);
+    showToast('All employee payroll records deleted.');
+  };
+
+  const handleDeletePayRun = (cycleId: string, cycleName: string) => {
+    if (!allow('delete')) return;
+    if (!window.confirm(`Are you sure you want to delete pay cycle "${cycleName}"?`)) return;
+    const next = payRuns.filter((c) => c.id !== cycleId);
+    savePayRuns(next);
+    showToast(`Deleted pay cycle "${cycleName}".`);
+  };
+
+  const handleDeleteClaim = (claimId: string, title: string) => {
+    if (!allow('delete')) return;
+    if (!window.confirm(`Are you sure you want to delete reimbursement claim "${title}"?`)) return;
+    const next = allClaims.filter((c) => c.id !== claimId);
+    saveClaims(next);
+    showToast(`Deleted reimbursement claim "${title}".`);
   };
 
   const handleExportJournalCSV = () => {
@@ -321,8 +433,13 @@ export const PayrollView: React.FC = () => {
           </button>
 
           <button
-            onClick={() => handleStartPayRun(payRuns[0])}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 shadow-md shadow-sky-500/20 transition-all"
+            onClick={() => payRuns.length > 0 && handleStartPayRun(payRuns[0])}
+            disabled={payRuns.length === 0}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-white transition-all ${
+              payRuns.length > 0
+                ? 'bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 shadow-md shadow-sky-500/20 cursor-pointer'
+                : 'bg-slate-400 dark:bg-slate-700 cursor-not-allowed opacity-60'
+            }`}
           >
             <DollarSign className="w-4 h-4" />
             <span>Run Payroll Now</span>
@@ -349,8 +466,10 @@ export const PayrollView: React.FC = () => {
           </div>
           <div className="flex items-center gap-1 text-[11px] font-semibold text-emerald-500 mt-1">
             <TrendingUp className="w-3 h-3" />
-            <span>+3.8%</span>
-            <span className="font-normal text-slate-400 dark:text-slate-500">vs Q3 avg</span>
+            <span>{payrollRecords.length > 0 ? '+3.8%' : '0.0%'}</span>
+            <span className="font-normal text-slate-400 dark:text-slate-500">
+              {payrollRecords.length > 0 ? 'vs Q3 avg' : 'No active records'}
+            </span>
           </div>
         </div>
 
@@ -370,7 +489,7 @@ export const PayrollView: React.FC = () => {
             {currency.symbol}{totalMonthlyNet.toLocaleString()}
           </div>
           <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
-            15 direct deposits ready
+            {payrollRecords.length} direct deposits ready
           </p>
         </div>
 
@@ -390,7 +509,7 @@ export const PayrollView: React.FC = () => {
             {currency.symbol}{totalMonthlyTaxes.toLocaleString()}
           </div>
           <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
-            IRS EFTPS & State auto-filed
+            {payrollRecords.length > 0 ? 'IRS EFTPS & State auto-filed' : 'No tax withholdings'}
           </p>
         </div>
 
@@ -410,7 +529,7 @@ export const PayrollView: React.FC = () => {
             {currency.symbol}{totalMonthlyBenefits.toLocaleString()}
           </div>
           <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
-            Safe harbor match active
+            {payrollRecords.length > 0 ? 'Safe harbor match active' : 'No benefits active'}
           </p>
         </div>
 
@@ -562,6 +681,21 @@ export const PayrollView: React.FC = () => {
                   <option value="On Hold">On Hold</option>
                 </select>
               </div>
+
+              {payrollRecords.length > 0 && allow('delete') && (
+                <button
+                  onClick={handleClearAllPayroll}
+                  title="Delete all payroll records from roster"
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition-colors ${
+                    isLight
+                      ? 'border-rose-200 text-rose-600 bg-rose-50/60 hover:bg-rose-100/60'
+                      : 'border-rose-800/60 text-rose-400 bg-rose-950/30 hover:bg-rose-900/40'
+                  }`}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete All</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -743,6 +877,20 @@ export const PayrollView: React.FC = () => {
                                 <PauseCircle className="w-3.5 h-3.5" />
                               )}
                             </button>
+
+                            {allow('delete') && (
+                              <button
+                                onClick={() => handleDeleteRecord(record.id, record.name)}
+                                title={`Delete payroll record for ${record.name}`}
+                                className={`p-1.5 rounded-lg border transition-colors ${
+                                  isLight
+                                    ? 'border-rose-200 text-rose-600 hover:bg-rose-50'
+                                    : 'border-rose-800 text-rose-400 hover:bg-rose-950/40'
+                                }`}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -754,9 +902,26 @@ export const PayrollView: React.FC = () => {
 
             {filteredRoster.length === 0 && (
               <div className="py-12 text-center text-slate-400">
-                <AlertCircle className="w-8 h-8 mx-auto mb-2 text-slate-300" />
-                <p className="text-sm font-semibold">No payroll records match your search criteria.</p>
-                <p className="text-xs text-slate-500 mt-1">Try resetting the department or status filter.</p>
+                <AlertCircle className="w-8 h-8 mx-auto mb-2 text-slate-300 dark:text-slate-600" />
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                  {allPayrollRecords.length === 0
+                    ? 'No employee payroll records found.'
+                    : 'No payroll records match your search criteria.'}
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  {allPayrollRecords.length === 0
+                    ? 'All employee payroll records have been removed or wiped.'
+                    : 'Try resetting the department or status filter.'}
+                </p>
+                {allPayrollRecords.length === 0 && (
+                  <button
+                    onClick={() => savePayrollRecords(INITIAL_PAYROLL_RECORDS)}
+                    className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-500 text-white hover:bg-sky-600 shadow-xs cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Restore Default Roster</span>
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -837,7 +1002,7 @@ export const PayrollView: React.FC = () => {
                       </div>
 
                       {/* Action */}
-                      <div>
+                      <div className="flex items-center gap-2">
                         {isScheduled ? (
                           <button
                             onClick={() => handleStartPayRun(cycle)}
@@ -862,12 +1027,41 @@ export const PayrollView: React.FC = () => {
                             <span>View Summary</span>
                           </button>
                         )}
+
+                        {allow('delete') && (
+                          <button
+                            onClick={() => handleDeletePayRun(cycle.id, cycle.cycleName)}
+                            title="Delete pay cycle"
+                            className={`p-2 rounded-xl border transition-colors ${
+                              isLight
+                                ? 'border-rose-200 text-rose-600 hover:bg-rose-50'
+                                : 'border-rose-800 text-rose-400 hover:bg-rose-950/40'
+                            }`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
                 </div>
               );
             })}
+
+            {payRuns.length === 0 && (
+              <div className="py-12 text-center text-slate-400">
+                <AlertCircle className="w-8 h-8 mx-auto mb-2 text-slate-300 dark:text-slate-600" />
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">No pay runs or cycles scheduled.</p>
+                <p className="text-xs text-slate-500 mt-1">All cycles have been cleared or wiped.</p>
+                <button
+                  onClick={() => savePayRuns(INITIAL_PAY_RUNS)}
+                  className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-500 text-white hover:bg-sky-600 shadow-xs cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Restore Default Pay Runs</span>
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1004,17 +1198,28 @@ export const PayrollView: React.FC = () => {
                     </div>
                   </div>
 
-                  <span
-                    className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${
-                      claim.status === 'Approved'
-                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
-                        : claim.status === 'Rejected'
-                        ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20'
-                        : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
-                    }`}
-                  >
-                    {claim.status}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${
+                        claim.status === 'Approved'
+                          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                          : claim.status === 'Rejected'
+                          ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20'
+                          : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
+                      }`}
+                    >
+                      {claim.status}
+                    </span>
+                    {allow('delete') && (
+                      <button
+                        onClick={() => handleDeleteClaim(claim.id, claim.title)}
+                        title="Delete reimbursement claim"
+                        className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div>
@@ -1061,6 +1266,27 @@ export const PayrollView: React.FC = () => {
                 </div>
               </div>
             ))}
+
+            {filteredClaims.length === 0 && (
+              <div className="py-12 text-center text-slate-400 col-span-1 md:col-span-2">
+                <AlertCircle className="w-8 h-8 mx-auto mb-2 text-slate-300 dark:text-slate-600" />
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">No reimbursement claims found.</p>
+                <p className="text-xs text-slate-500 mt-1">
+                  {allClaims.length === 0
+                    ? 'All reimbursement claims have been cleared or wiped.'
+                    : 'No claims match your status filter.'}
+                </p>
+                {allClaims.length === 0 && (
+                  <button
+                    onClick={() => saveClaims(INITIAL_REIMBURSEMENT_CLAIMS)}
+                    className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-500 text-white hover:bg-sky-600 shadow-xs cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Restore Default Claims</span>
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
