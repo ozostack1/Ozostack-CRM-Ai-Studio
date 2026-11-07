@@ -212,6 +212,7 @@ export const InvoicesView: React.FC = () => {
       });
     }
     setDeletingId(null);
+    window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
   };
 
   // Quick Status Updater

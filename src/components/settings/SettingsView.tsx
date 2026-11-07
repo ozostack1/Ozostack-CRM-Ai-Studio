@@ -206,7 +206,9 @@ export const SettingsView: React.FC = () => {
         localStorage.setItem('ozostack_quotations_v1', JSON.stringify(INITIAL_QUOTATIONS));
         localStorage.setItem('ozostack_contracts_v1', JSON.stringify(INITIAL_CONTRACTS));
         localStorage.setItem('ozostack_expenses_v1', JSON.stringify(INITIAL_EXPENSES));
+        localStorage.setItem('ozostack_expenses', JSON.stringify(INITIAL_EXPENSES));
         localStorage.setItem('ozostack_payments_v1', JSON.stringify(INITIAL_PAYMENTS));
+        localStorage.setItem('ozostack_payments', JSON.stringify(INITIAL_PAYMENTS));
         localStorage.setItem('ozostack_documents_v2', JSON.stringify(INITIAL_DOCUMENTS));
         localStorage.setItem('ozostack_time_entries_v1', JSON.stringify(INITIAL_TIME_ENTRIES));
         localStorage.setItem('ozostack_team_members_v1', JSON.stringify(INITIAL_EMPLOYEES));
@@ -236,7 +238,9 @@ export const SettingsView: React.FC = () => {
         localStorage.setItem('ozostack_quotations_v1', JSON.stringify([]));
         localStorage.setItem('ozostack_contracts_v1', JSON.stringify([]));
         localStorage.setItem('ozostack_expenses_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_expenses', JSON.stringify([]));
         localStorage.setItem('ozostack_payments_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_payments', JSON.stringify([]));
         localStorage.setItem('ozostack_documents_v2', JSON.stringify([]));
         localStorage.setItem('ozostack_time_entries_v1', JSON.stringify([]));
         localStorage.setItem('ozostack_team_members_v1', JSON.stringify([]));

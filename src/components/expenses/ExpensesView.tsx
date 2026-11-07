@@ -143,11 +143,13 @@ export const ExpensesView: React.FC = () => {
       const next = prev.filter((it) => it.id !== id);
       try {
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(next));
+        localStorage.setItem('ozostack_expenses_v1', JSON.stringify(next));
       } catch {}
       return next;
     });
     setIsDetailsDrawerOpen(false);
     setSelectedExpense(null);
+    window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
   };
 
   // Bulk approve pending

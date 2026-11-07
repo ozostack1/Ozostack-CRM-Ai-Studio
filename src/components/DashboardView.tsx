@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Crown,
   Plus,
@@ -21,6 +21,13 @@ import {
 import { useTheme } from '../context/ThemeContext';
 import { useSystemCurrency } from '../data/currencyService';
 import { DashboardConfig, INITIAL_DASHBOARDS, AVAILABLE_WIDGETS } from '../types/dashboard';
+import {
+  INITIAL_PROJECTS,
+  INITIAL_TASKS,
+  INITIAL_DETAILED_INVOICES,
+  INITIAL_EXPENSES,
+  INITIAL_PAYMENTS,
+} from '../data/mockData';
 import { MetricCards } from './MetricCards';
 import { ChartsSection } from './ChartsSection';
 import { MidLevelAnalytics } from './MidLevelAnalytics';
@@ -106,6 +113,104 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   // Current active dashboard
   const activeDashboard =
     dashboards.find((d) => d.id === activeDashboardId) || dashboards[0] || INITIAL_DASHBOARDS[0];
+
+  // Live Executive Telemetry for Connected Modules strip
+  const readExecutiveData = () => {
+    const parse = (key: string) => {
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw !== null) {
+          const p = JSON.parse(raw);
+          if (Array.isArray(p)) return p;
+        }
+      } catch {}
+      return null;
+    };
+
+    const projectsList = parse('ozostack_projects') ?? INITIAL_PROJECTS;
+    const tasksList = parse('ozostack_tasks_v2') ?? INITIAL_TASKS;
+    const invoicesList = parse('ozostack_invoices_v1') ?? INITIAL_DETAILED_INVOICES;
+    const expensesList = parse('ozostack_expenses_v1') ?? parse('ozostack_expenses') ?? INITIAL_EXPENSES;
+    const paymentsList = parse('ozostack_payments_v1') ?? parse('ozostack_payments') ?? INITIAL_PAYMENTS;
+
+    return {
+      projects: projectsList,
+      tasks: tasksList,
+      invoices: invoicesList,
+      expenses: expensesList,
+      payments: paymentsList,
+    };
+  };
+
+  const [execData, setExecData] = useState(readExecutiveData);
+
+  useEffect(() => {
+    const sync = () => setExecData(readExecutiveData());
+    window.addEventListener('storage', sync);
+    window.addEventListener('ozostack-crm-config-changed', sync);
+    window.addEventListener('focus', sync);
+    return () => {
+      window.removeEventListener('storage', sync);
+      window.removeEventListener('ozostack-crm-config-changed', sync);
+      window.removeEventListener('focus', sync);
+    };
+  }, []);
+
+  const execSummaries = useMemo(() => {
+    // Projects
+    const activeProjects = execData.projects.filter(
+      (p: any) => (p.status || '').toLowerCase().includes('progress') || (p.status || '').toLowerCase().includes('active')
+    ).length;
+    const delayedProjects = execData.projects.filter(
+      (p: any) => (p.status || '').toLowerCase().includes('delayed') || (p.status || '').toLowerCase().includes('critical')
+    ).length;
+    const projectsSummary = `${activeProjects} Active · ${delayedProjects} Delayed`;
+
+    // Tasks
+    const dueTasks = execData.tasks.filter((t: any) => t.status !== 'Completed').length;
+    const doneTasks = execData.tasks.filter((t: any) => t.status === 'Completed').length;
+    const tasksSummary = `${dueTasks} Due · ${doneTasks} Done`;
+
+    // Invoices
+    const totalInvoiced = execData.invoices.reduce((sum: number, inv: any) => {
+      const val = typeof inv.amount === 'number' ? inv.amount : parseFloat(String(inv.amount || 0).replace(/[^0-9.]/g, '')) || 0;
+      return sum + val;
+    }, 0);
+    const paidInvoiced = execData.invoices
+      .filter((inv: any) => inv.status === 'Paid')
+      .reduce((sum: number, inv: any) => {
+        const val = typeof inv.amount === 'number' ? inv.amount : parseFloat(String(inv.amount || 0).replace(/[^0-9.]/g, '')) || 0;
+        return sum + val;
+      }, 0);
+    const paidPct = totalInvoiced > 0 ? Math.round((paidInvoiced / totalInvoiced) * 100) : 0;
+    const formattedTotalInv = totalInvoiced >= 1000 ? `${(totalInvoiced / 1000).toFixed(1)}K` : totalInvoiced.toLocaleString();
+    const invoicesSummary = `${currency.symbol}${formattedTotalInv} · ${paidPct}% Paid`;
+
+    // Expenses
+    const totalExpenses = execData.expenses.reduce((sum: number, exp: any) => {
+      const val = typeof exp.amount === 'number' ? exp.amount : parseFloat(String(exp.amount || 0).replace(/[^0-9.]/g, '')) || 0;
+      return sum + val;
+    }, 0);
+    const expensesSummary = `${currency.symbol}${Math.round(totalExpenses).toLocaleString()} Tracked`;
+
+    // Payments
+    const paymentsCount = execData.payments.length;
+    const paymentsSummary = paymentsCount === 0 ? '0 Settled · Gateways Ready' : 'Stripe · Wire · PayPal';
+
+    // P&L
+    const netProfit = totalInvoiced - totalExpenses;
+    const grossMargin = totalInvoiced > 0 ? ((netProfit / totalInvoiced) * 100).toFixed(1) + '%' : '0.0%';
+    const pnlSummary = `${currency.symbol}${Math.round(netProfit).toLocaleString()} Net · ${grossMargin}`;
+
+    return {
+      projectsSummary,
+      tasksSummary,
+      invoicesSummary,
+      expensesSummary,
+      paymentsSummary,
+      pnlSummary,
+    };
+  }, [execData, currency.symbol]);
 
   // Dashboard creation
   const handleCreateDashboard = (newDash: DashboardConfig) => {
@@ -392,7 +497,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   Projects
                 </span>
                 <span className="text-[9px] text-slate-400 block truncate">
-                  38 Active · 2 Delayed
+                  {execSummaries.projectsSummary}
                 </span>
               </div>
             </div>
@@ -417,7 +522,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   Tasks
                 </span>
                 <span className="text-[9px] text-slate-400 block truncate">
-                  86 Due · 128 Done
+                  {execSummaries.tasksSummary}
                 </span>
               </div>
             </div>
@@ -442,7 +547,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   Invoices
                 </span>
                 <span className="text-[9px] text-emerald-500 font-semibold block truncate">
-                  {currency.symbol}128.4K · 68% Paid
+                  {execSummaries.invoicesSummary}
                 </span>
               </div>
             </div>
@@ -467,7 +572,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   Expenses
                 </span>
                 <span className="text-[9px] text-slate-400 block truncate">
-                  {currency.symbol}38,420 Tracked
+                  {execSummaries.expensesSummary}
                 </span>
               </div>
             </div>
@@ -492,7 +597,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   Payments
                 </span>
                 <span className="text-[9px] text-teal-500 font-semibold block truncate">
-                  Stripe · Wire · PayPal
+                  {execSummaries.paymentsSummary}
                 </span>
               </div>
             </div>
@@ -517,7 +622,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   Profit & Loss
                 </span>
                 <span className="text-[9px] text-amber-500 font-semibold block truncate">
-                  {currency.symbol}47,850 Net · 42.6%
+                  {execSummaries.pnlSummary}
                 </span>
               </div>
             </div>

@@ -299,24 +299,44 @@ export const TasksView: React.FC = () => {
 
   const handleBulkDelete = () => {
     if (window.confirm(`Delete ${selectedTaskIds.length} selected tasks?`)) {
-      setTasks((prev) => prev.filter((t) => !selectedTaskIds.includes(t.id)));
+      setTasks((prev) => {
+        const next = prev.filter((t) => !selectedTaskIds.includes(t.id));
+        try {
+          localStorage.setItem('ozostack_tasks_v2', JSON.stringify(next));
+        } catch {}
+        return next;
+      });
       showToast(`${selectedTaskIds.length} tasks deleted.`);
       setSelectedTaskIds([]);
+      window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
     }
   };
 
   // CRUD Operations
   const handleSaveTask = (task: TaskItem) => {
     if (taskToEdit) {
-      setTasks((prev) => prev.map((t) => (t.id === task.id ? task : t)));
+      setTasks((prev) => {
+        const next = prev.map((t) => (t.id === task.id ? task : t));
+        try {
+          localStorage.setItem('ozostack_tasks_v2', JSON.stringify(next));
+        } catch {}
+        return next;
+      });
       if (selectedDrawerTask?.id === task.id) {
         setSelectedDrawerTask(task);
       }
       showToast(`Task "${task.title}" updated.`);
     } else {
-      setTasks((prev) => [task, ...prev]);
+      setTasks((prev) => {
+        const next = [task, ...prev];
+        try {
+          localStorage.setItem('ozostack_tasks_v2', JSON.stringify(next));
+        } catch {}
+        return next;
+      });
       showToast(`New task "${task.title}" created & assigned to ${task.assignee}.`);
     }
+    window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
     // Dispatch real-time employee assignment notification
     if (task.assignee) {
       notifyTaskAssigned(task);
@@ -332,6 +352,7 @@ export const TasksView: React.FC = () => {
       return next;
     });
     showToast(`Task "${taskTitle}" deleted.`);
+    window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
     if (selectedDrawerTask?.id === taskId) {
       setIsDrawerOpen(false);
       setSelectedDrawerTask(null);

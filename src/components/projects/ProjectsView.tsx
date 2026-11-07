@@ -489,6 +489,7 @@ export const ProjectsView: React.FC = () => {
       return next;
     });
     showToast(`Project "${projectName}" deleted.`);
+    window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
     if (selectedDrawerProject?.id === projectId) {
       setIsDrawerOpen(false);
       setSelectedDrawerProject(null);
@@ -506,6 +507,7 @@ export const ProjectsView: React.FC = () => {
       return next;
     });
     setSelectedDrawerProject(updated);
+    window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
   };
 
   const handleProjectStatusChange = (
