@@ -5,6 +5,7 @@ import {
   Search,
   Filter,
   Download,
+  Upload,
   LayoutList,
   Kanban,
   MessageSquare,
@@ -43,6 +44,7 @@ import { LeadModal } from './LeadModal';
 import { LeadActionModal, ContactActionType } from './LeadActionModal';
 import { LeadDetailsDrawer } from './LeadDetailsDrawer';
 import { AiFollowupModal } from './AiFollowupModal';
+import { BulkLeadUploadModal } from './BulkLeadUploadModal';
 
 const KANBAN_STAGES: LeadStatus[] = [
   'New Lead',
@@ -66,7 +68,7 @@ type LeadSortOption =
 export const LeadsView: React.FC = () => {
   const { theme, setActiveNav } = useTheme();
   const { scopeFilter, users } = useAuth();
-  const { config } = useCrmConfig();
+  const { config, updateConfig } = useCrmConfig();
   const currency = useSystemCurrency();
   const isLight = theme === 'white-sky';
   const kanbanStages = useMemo(
@@ -168,7 +170,10 @@ export const LeadsView: React.FC = () => {
 
   // Modals state
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false);
   const [leadToEdit, setLeadToEdit] = useState<Lead | null>(null);
+  const [isAddingStage, setIsAddingStage] = useState(false);
+  const [newStageInput, setNewStageInput] = useState('');
 
   // Direct Contact Action Modal
   const [actionModalLead, setActionModalLead] = useState<Lead | null>(null);
@@ -304,6 +309,49 @@ export const LeadsView: React.FC = () => {
         timeAgo: 'Just now',
       });
     }
+  };
+
+  const handleBulkImportLeads = (importedLeads: Lead[]) => {
+    if (importedLeads.length === 0) return;
+    setLeads((prev) => {
+      const next = [...importedLeads, ...prev];
+      try {
+        localStorage.setItem('ozostack_leads_v2', JSON.stringify(next));
+        window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
+      } catch {}
+      return next;
+    });
+
+    const totalImportedValue = importedLeads.reduce((s, l) => s + l.value, 0);
+    addNotification({
+      title: `Bulk Import: ${importedLeads.length} Leads Added`,
+      subtitle: `Stage: "${importedLeads[0].status}" · Total Value: ${currency.symbol}${totalImportedValue.toLocaleString()}`,
+      type: 'lead',
+      read: false,
+      targetNav: 'Leads',
+      priority: 'high',
+      timeAgo: 'Just now',
+    });
+
+    showToast(`Successfully imported ${importedLeads.length} leads into "${importedLeads[0].status}"!`);
+  };
+
+  const handleQuickCreateStage = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = newStageInput.trim();
+    if (!trimmed) return;
+    if (!kanbanStages.some((s) => s.toLowerCase() === trimmed.toLowerCase())) {
+      updateConfig((prev) => ({
+        ...prev,
+        leadStages: [
+          ...prev.leadStages,
+          { id: `lst-${Date.now()}`, name: trimmed, color: '#0ea5e9' },
+        ],
+      }));
+      showToast(`Created new lead stage "${trimmed}".`);
+    }
+    setNewStageInput('');
+    setIsAddingStage(false);
   };
 
   const handleDeleteLead = (leadId: string) => {
@@ -560,7 +608,66 @@ export const LeadsView: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
+          {isAddingStage ? (
+            <form onSubmit={handleQuickCreateStage} className="flex items-center gap-1.5">
+              <input
+                type="text"
+                autoFocus
+                value={newStageInput}
+                onChange={(e) => setNewStageInput(e.target.value)}
+                placeholder="New stage name..."
+                className={`text-xs px-2.5 py-1.5 rounded-lg border outline-none ${
+                  isLight
+                    ? 'bg-white border-sky-300 text-slate-800'
+                    : 'bg-slate-800 border-slate-600 text-white'
+                }`}
+              />
+              <button
+                type="submit"
+                className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white"
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAddingStage(false);
+                  setNewStageInput('');
+                }}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </form>
+          ) : (
+            <button
+              onClick={() => setIsAddingStage(true)}
+              className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border transition-colors ${
+                isLight
+                  ? 'bg-white border-sky-200 text-sky-700 hover:bg-sky-50'
+                  : 'bg-slate-800 border-slate-700 text-sky-300 hover:bg-slate-700'
+              }`}
+              title="Create a new lead pipeline stage"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Create Stage</span>
+            </button>
+          )}
+
+          <button
+            onClick={() => setIsBulkUploadOpen(true)}
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border transition-colors ${
+              isLight
+                ? 'bg-sky-50 border-sky-200 text-sky-700 hover:bg-sky-100'
+                : 'bg-sky-950/40 border-sky-800/70 text-sky-300 hover:bg-sky-900/50'
+            }`}
+            title="Bulk upload leads from CSV or JSON"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span>Bulk Upload</span>
+          </button>
+
           <button
             onClick={handleExportCSV}
             className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border transition-colors ${
@@ -859,7 +966,29 @@ export const LeadsView: React.FC = () => {
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              defaultValue=""
+              onChange={(e) => {
+                if (e.target.value) {
+                  handleBulkStatusChange(e.target.value as LeadStatus);
+                }
+              }}
+              className={`px-2.5 py-1 rounded-lg text-xs font-semibold border outline-none cursor-pointer ${
+                isLight
+                  ? 'bg-white border-sky-200 text-slate-700'
+                  : 'bg-slate-800 border-slate-700 text-slate-200'
+              }`}
+            >
+              <option value="" disabled>
+                Move to Stage...
+              </option>
+              {kanbanStages.map((st) => (
+                <option key={st} value={st}>
+                  {st}
+                </option>
+              ))}
+            </select>
             <button
               onClick={() => handleBulkStatusChange('Won')}
               className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white"
@@ -1429,6 +1558,13 @@ export const LeadsView: React.FC = () => {
         onSave={handleSaveLead}
         leadToEdit={leadToEdit}
         defaultStage={defaultStage}
+      />
+
+      {/* Bulk Lead Upload Modal */}
+      <BulkLeadUploadModal
+        isOpen={isBulkUploadOpen}
+        onClose={() => setIsBulkUploadOpen(false)}
+        onBulkImport={handleBulkImportLeads}
       />
 
       {/* Direct Contact Modal (WhatsApp, Mail, Call) */}

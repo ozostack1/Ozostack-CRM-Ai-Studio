@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Sparkles, DollarSign, Building, Mail, Phone, MessageSquare, User, Tag } from 'lucide-react';
+import { X, Sparkles, DollarSign, Building, Mail, Phone, MessageSquare, User, Tag, Plus, Check } from 'lucide-react';
 import { Lead, LeadStatus, LeadPriority, LeadSource } from '../../types/crm';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
@@ -37,9 +37,28 @@ export const LeadModal: React.FC<LeadModalProps> = ({
 }) => {
   const { theme } = useTheme();
   const { users, currentUser } = useAuth();
-  const { config } = useCrmConfig();
+  const { config, updateConfig } = useCrmConfig();
   const currency = useSystemCurrency();
   const isLight = theme === 'white-sky';
+  const [isAddingStage, setIsAddingStage] = useState(false);
+  const [newStageName, setNewStageName] = useState('');
+
+  const handleAddStage = () => {
+    const trimmed = newStageName.trim();
+    if (!trimmed) return;
+    if (!dynamicStatuses.some((s) => s.toLowerCase() === trimmed.toLowerCase())) {
+      updateConfig((prev) => ({
+        ...prev,
+        leadStages: [
+          ...prev.leadStages,
+          { id: `lst-${Date.now()}`, name: trimmed, color: '#0ea5e9' },
+        ],
+      }));
+    }
+    setFormData((prev) => ({ ...prev, status: trimmed as LeadStatus }));
+    setNewStageName('');
+    setIsAddingStage(false);
+  };
   const ownersList = React.useMemo(
     () => Array.from(new Set([...users.map((u) => u.name), ...OWNERS])),
     [users]
@@ -297,24 +316,57 @@ export const LeadModal: React.FC<LeadModalProps> = ({
 
             {/* Lead Status / Stage */}
             <div>
-              <label className="block text-xs font-semibold mb-1 text-slate-600 dark:text-slate-300">
-                Pipeline Stage / Status
-              </label>
-              <select
-                value={formData.status || 'New Lead'}
-                onChange={(e) => setFormData({ ...formData, status: e.target.value as LeadStatus })}
-                className={`w-full text-xs px-3 py-2 rounded-lg border outline-none font-medium ${
-                  isLight
-                    ? 'bg-slate-50 border-sky-200 text-slate-800 focus:border-sky-500'
-                    : 'bg-slate-800 border-slate-700 text-white focus:border-sky-400'
-                }`}
-              >
-                {dynamicStatuses.map((st) => (
-                  <option key={st} value={st}>
-                    {st}
-                  </option>
-                ))}
-              </select>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">
+                  Pipeline Stage / Status
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setIsAddingStage((prev) => !prev)}
+                  className="text-[11px] font-bold text-sky-500 hover:text-sky-600 inline-flex items-center gap-0.5"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>{isAddingStage ? 'Cancel' : 'Create Stage'}</span>
+                </button>
+              </div>
+              {isAddingStage ? (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={newStageName}
+                    onChange={(e) => setNewStageName(e.target.value)}
+                    placeholder="New stage name..."
+                    className={`flex-1 text-xs px-2.5 py-2 rounded-lg border outline-none ${
+                      isLight
+                        ? 'bg-slate-50 border-sky-200 text-slate-800 focus:border-sky-500'
+                        : 'bg-slate-800 border-slate-700 text-white focus:border-sky-400'
+                    }`}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddStage}
+                    className="px-2.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <select
+                  value={formData.status || 'New Lead'}
+                  onChange={(e) => setFormData({ ...formData, status: e.target.value as LeadStatus })}
+                  className={`w-full text-xs px-3 py-2 rounded-lg border outline-none font-medium ${
+                    isLight
+                      ? 'bg-slate-50 border-sky-200 text-slate-800 focus:border-sky-500'
+                      : 'bg-slate-800 border-slate-700 text-white focus:border-sky-400'
+                  }`}
+                >
+                  {dynamicStatuses.map((st) => (
+                    <option key={st} value={st}>
+                      {st}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
 
             {/* Priority */}
