@@ -299,9 +299,8 @@ export const Sidebar: React.FC = () => {
       >
         <div className="flex items-center gap-3 overflow-hidden">
           {/* Logo icon */}
-          <div className="relative flex items-center justify-center w-9 h-9 rounded-xl bg-gradient-to-tr from-sky-500 via-sky-400 to-indigo-500 shadow-md shadow-sky-500/20 shrink-0">
-            <Sparkles className="w-5 h-5 text-white" />
-            <div className="absolute inset-0 rounded-xl ring-1 ring-inset ring-white/30" />
+          <div className="relative flex items-center justify-center w-9 h-9 rounded-xl bg-black overflow-hidden shadow-md shadow-sky-500/20 shrink-0 border border-sky-500/30">
+            <img src="/ozostack-logo.jpg" alt="OzoStack Logo" className="w-full h-full object-cover" />
           </div>
 
           {!isSidebarCollapsed && (
