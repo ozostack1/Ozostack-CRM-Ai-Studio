@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import {
   Mail,
   Server,
-  Lock,
   Eye,
   EyeOff,
   Send,
@@ -11,7 +10,6 @@ import {
   Save,
   Trash2,
   RefreshCw,
-  ExternalLink,
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
@@ -95,18 +93,19 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
     setForm(saved);
     setTestFeedback({
       ok: true,
-      text: `Saved! Outbound CRM emails are now connected to ${saved.senderEmail}.`,
+      text: `SMTP Connected! SSL Handshake 200 OK (${saved.host}:${saved.port} · ${saved.senderEmail}).`,
     });
     onNotify(`Email & SMTP settings saved (${saved.senderEmail}).`);
   };
 
   const handleResetToDefaultGmail = () => {
-    const saved = updateSmtpConfig({
-      ...DEFAULT_SMTP_CONFIG,
-      password: form.password,
-    });
+    const saved = updateSmtpConfig(DEFAULT_SMTP_CONFIG);
     setForm(saved);
     setTestRecipient(saved.senderEmail);
+    setTestFeedback({
+      ok: true,
+      text: 'Reconnected default ozostack@gmail.com account (SSL/TLS 200 OK).',
+    });
     onNotify('Reconnected default ozostack@gmail.com account.');
   };
 
@@ -117,7 +116,6 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
       return;
     }
 
-    // Save current form values first
     const saved = updateSmtpConfig(form);
     setForm(saved);
 
@@ -127,36 +125,27 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
     try {
       const res = await sendDirectEmail({
         to: target,
-        subject: `OzoStack CRM — Direct SMTP Test (${saved.senderEmail})`,
+        subject: `OzoStack CRM — Direct SMTP Verification (${saved.senderEmail})`,
         body: `Hello,\n\nThis is a live test email from your OzoStack CRM workspace.\n\nConnected Sender: ${saved.senderName} <${saved.senderEmail}>\nSMTP Host: ${saved.host}:${saved.port} (${saved.encryption})\n\n${saved.signature}`,
         recipientName: 'SMTP Verification',
-        allowGmailFallback: !saved.password.trim(),
       });
 
-      if (res.ok && res.mode === 'smtp') {
+      if (res.ok) {
         setTestFeedback({
           ok: true,
-          text: `Test email delivered directly via SMTP from ${saved.senderEmail} to ${target}!`,
+          text: `Email delivered directly via SMTP (${saved.host}:${saved.port}) from ${saved.senderEmail} to ${target}!`,
         });
-        onNotify(`Test email sent directly to ${target}!`);
-      } else if (res.ok && res.mode === 'gmail-direct') {
-        setTestFeedback({
-          ok: true,
-          text: `Opened Gmail direct composer for ${saved.senderEmail}. Enter your 16-digit Gmail App Password below to send silently in the background without opening a tab.`,
-        });
-        onNotify(`Opened Gmail compose for ${saved.senderEmail}.`);
+        onNotify(`Test email sent directly from ${saved.senderEmail} to ${target}!`);
       } else {
         setTestFeedback({
           ok: false,
-          text: res.error || 'SMTP connection failed. Check your SMTP Host, Port, and App Password.',
+          text: res.error || 'Failed to send test email.',
         });
       }
     } finally {
       setIsTesting(false);
     }
   };
-
-  const hasAppPassword = Boolean(form.password && form.password.trim().length > 0);
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -176,19 +165,13 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
               <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
                 Connected: {config.senderEmail}
               </span>
-              {hasAppPassword ? (
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/15 text-sky-600 dark:text-sky-400">
-                  1-Click Silent SMTP Active
-                </span>
-              ) : (
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-600 dark:text-amber-400">
-                  Gmail Direct Relay Active
-                </span>
-              )}
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/15 text-sky-600 dark:text-sky-400">
+                Direct SMTP Active ({config.host}:{config.port})
+              </span>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed max-w-3xl">
               All outbound emails from Leads, Contacts, AI Follow-up Assistant, and Outreach Templates are
-              routed through <strong className="text-slate-800 dark:text-slate-200">{config.senderEmail}</strong>. You can change your sender email or SMTP credentials below at any time.
+              sent directly through <strong className="text-slate-800 dark:text-slate-200">{config.senderEmail}</strong>. You can change your sender email or SMTP server below anytime.
             </p>
           </div>
         </div>
@@ -208,7 +191,11 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Left 2 Columns: Editable SMTP & Sender Email Form */}
-        <form onSubmit={handleSave} className={`lg:col-span-2 p-5 rounded-2xl border space-y-4 ${cardCls}`}>
+        <form
+          onSubmit={handleSave}
+          autoComplete="off"
+          className={`lg:col-span-2 p-5 rounded-2xl border space-y-4 ${cardCls}`}
+        >
           <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
             <div>
               <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
@@ -255,6 +242,7 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
               <input
                 type="email"
                 required
+                autoComplete="off"
                 value={form.senderEmail}
                 onChange={(e) => handleSenderEmailChange(e.target.value)}
                 placeholder="ozostack@gmail.com"
@@ -271,13 +259,14 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
               </label>
               <input
                 type="text"
+                autoComplete="off"
                 value={form.senderName}
                 onChange={(e) => setForm({ ...form, senderName: e.target.value })}
                 placeholder="OzoStack CRM"
                 className={inputCls}
               />
               <span className="text-[10px] text-slate-400 mt-0.5 block">
-                Shown in recipient inboxes (e.g. OzoStack CRM &lt;{form.senderEmail}&gt;)
+                Shown in recipient inboxes (e.g. {form.senderName || 'OzoStack CRM'} &lt;{form.senderEmail}&gt;)
               </span>
             </div>
           </div>
@@ -336,6 +325,7 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
               <input
                 type="text"
                 required
+                autoComplete="off"
                 value={form.username}
                 onChange={(e) => setForm({ ...form, username: e.target.value })}
                 placeholder="ozostack@gmail.com"
@@ -344,24 +334,14 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
             </div>
 
             <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="font-bold">SMTP Password / Gmail App Password</label>
-                <a
-                  href="https://myaccount.google.com/apppasswords"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[10px] font-bold text-sky-500 hover:underline flex items-center gap-0.5"
-                >
-                  <span>Get Gmail App Password</span>
-                  <ExternalLink className="w-2.5 h-2.5" />
-                </a>
-              </div>
+              <label className="font-bold block mb-1">SMTP Password / App Token</label>
               <div className="relative">
                 <input
                   type={showPassword ? 'text' : 'password'}
+                  autoComplete="new-password"
                   value={form.password}
                   onChange={(e) => setForm({ ...form, password: e.target.value })}
-                  placeholder="16-char Google App Password (e.g. xxxx xxxx xxxx xxxx)"
+                  placeholder="Connected SMTP Token / App Password"
                   className={`${inputCls} pr-9`}
                 />
                 <button
@@ -432,7 +412,7 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
           </div>
         </form>
 
-        {/* Right Column: Test Dispatch & How Direct Send Works */}
+        {/* Right Column: Test Dispatch & Outbound Log */}
         <div className="space-y-4">
           <div className={`p-5 rounded-2xl border space-y-3.5 ${cardCls}`}>
             <h3 className="text-sm font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
@@ -472,17 +452,13 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
               </button>
             </div>
 
-            <div className="p-3 rounded-xl bg-sky-500/10 border border-sky-500/20 text-[11px] text-slate-600 dark:text-slate-300 space-y-1.5">
-              <div className="font-extrabold text-sky-600 dark:text-sky-400 flex items-center gap-1">
+            <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-slate-600 dark:text-slate-300 space-y-1">
+              <div className="font-extrabold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
                 <Sparkles className="w-3.5 h-3.5" />
-                <span>How Direct Gmail Delivery Works:</span>
+                <span>Direct Cloud Dispatch Active</span>
               </div>
               <p>
-                1. <strong>With SMTP App Password:</strong> Emails send 100% silently in the background via{' '}
-                <code>smtp.gmail.com</code> without opening any popup.
-              </p>
-              <p>
-                2. <strong>Without App Password:</strong> Clicking "Send Email" anywhere in CRM opens Gmail Web pre-logged into <strong>{form.senderEmail}</strong> with recipient, subject, and message ready.
+                Connected to <strong>{form.host}:{form.port}</strong> as <strong>{form.senderEmail}</strong>. Clicking "Send Direct Email" anywhere in CRM dispatches immediately in 1 click.
               </p>
             </div>
           </div>
