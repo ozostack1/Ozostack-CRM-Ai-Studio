@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   X,
   UserPlus,
@@ -11,16 +11,25 @@ import {
   Calendar,
   Sparkles,
   Check,
+  Plus,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useSystemCurrency } from '../../data/currencyService';
-import { DepartmentType, EmployeeMember, EmploymentType, MemberStatus } from './teamMockData';
+import {
+  DepartmentType,
+  EmployeeMember,
+  EmploymentType,
+  MemberStatus,
+  getAvailableDepartmentNames,
+} from './teamMockData';
 
 interface AddMemberModalProps {
   isOpen: boolean;
   onClose: () => void;
   onAddMember: (member: EmployeeMember) => void;
   existingManagers: string[];
+  departments?: string[];
+  onCreateDepartment?: (deptName: string) => void;
 }
 
 export const AddMemberModal: React.FC<AddMemberModalProps> = ({
@@ -28,17 +37,28 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
   onClose,
   onAddMember,
   existingManagers,
+  departments = [],
+  onCreateDepartment,
 }) => {
   const { theme } = useTheme();
   const currency = useSystemCurrency();
   const isLight = theme === 'white-sky';
+
+  const [customDepts, setCustomDepts] = useState<string[]>([]);
+  const [isAddingDept, setIsAddingDept] = useState(false);
+  const [newDeptName, setNewDeptName] = useState('');
+
+  const availableDepartments = useMemo(
+    () => getAvailableDepartmentNames([...customDepts, ...departments]),
+    [departments, customDepts, isOpen]
+  );
 
   const [formData, setFormData] = useState({
     name: '',
     email: '',
     phone: '',
     role: '',
-    department: 'Engineering' as DepartmentType,
+    department: (availableDepartments[0] || 'Engineering') as DepartmentType,
     employmentType: 'Full-Time' as EmploymentType,
     status: 'Active' as MemberStatus,
     location: 'San Francisco, CA',
@@ -48,6 +68,28 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
     bio: '',
     startDate: new Date().toISOString().split('T')[0],
   });
+
+  useEffect(() => {
+    if (isOpen) {
+      const freshDepts = getAvailableDepartmentNames([...customDepts, ...departments]);
+      setFormData((prev) => ({
+        ...prev,
+        department: freshDepts.includes(prev.department)
+          ? prev.department
+          : (freshDepts[0] || 'Engineering'),
+      }));
+    }
+  }, [isOpen, departments, customDepts]);
+
+  const handleQuickCreateDepartment = () => {
+    const trimmed = newDeptName.trim();
+    if (!trimmed) return;
+    setCustomDepts((prev) => [trimmed, ...prev]);
+    onCreateDepartment?.(trimmed);
+    setFormData((prev) => ({ ...prev, department: trimmed }));
+    setNewDeptName('');
+    setIsAddingDept(false);
+  };
 
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -207,24 +249,52 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Department <span className="text-rose-500">*</span>
-              </label>
-              <div className="relative">
-                <Building2 className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
-                <select
-                  value={formData.department}
-                  onChange={(e) => setFormData({ ...formData, department: e.target.value as DepartmentType })}
-                  className={`w-full pl-9 pr-3 py-2 rounded-xl text-xs border transition-colors outline-hidden focus:ring-2 focus:ring-sky-500/20 appearance-none ${inputBg}`}
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  Department <span className="text-rose-500">*</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setIsAddingDept((prev) => !prev)}
+                  className="text-[11px] font-bold text-sky-500 hover:underline flex items-center gap-0.5"
                 >
-                  <option value="Engineering">Engineering</option>
-                  <option value="Product & Design">Product & Design</option>
-                  <option value="Sales & CRM">Sales & CRM</option>
-                  <option value="Marketing">Marketing</option>
-                  <option value="Finance & Operations">Finance & Operations</option>
-                  <option value="Human Resources">Human Resources</option>
-                </select>
+                  <Plus className="w-3 h-3" />
+                  <span>{isAddingDept ? 'Cancel' : 'New Dept'}</span>
+                </button>
               </div>
+              {isAddingDept ? (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    placeholder="Enter new department name..."
+                    value={newDeptName}
+                    onChange={(e) => setNewDeptName(e.target.value)}
+                    className={`flex-1 px-3 py-2 rounded-xl text-xs border transition-colors outline-hidden focus:ring-2 focus:ring-sky-500/20 ${inputBg}`}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleQuickCreateDepartment}
+                    className="px-3 py-2 rounded-xl text-xs font-bold bg-sky-500 hover:bg-sky-600 text-white shrink-0"
+                  >
+                    Add
+                  </button>
+                </div>
+              ) : (
+                <div className="relative">
+                  <Building2 className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
+                  <select
+                    value={formData.department}
+                    onChange={(e) => setFormData({ ...formData, department: e.target.value as DepartmentType })}
+                    className={`w-full pl-9 pr-3 py-2 rounded-xl text-xs border transition-colors outline-hidden focus:ring-2 focus:ring-sky-500/20 appearance-none ${inputBg}`}
+                  >
+                    {availableDepartments.map((dept) => (
+                      <option key={dept} value={dept}>
+                        {dept}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
           </div>
 

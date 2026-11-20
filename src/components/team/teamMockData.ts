@@ -995,3 +995,58 @@ export const INITIAL_JOB_REQUISITIONS: JobRequisition[] = [
   },
 ];
 
+export const DEFAULT_DEPARTMENT_NAMES: string[] = DEPARTMENTS_DATA.map((d) => d.name);
+
+export function getAvailableDepartmentNames(extra: string[] = []): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  const add = (name?: string) => {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return;
+    const lower = trimmed.toLowerCase();
+    if (!seen.has(lower)) {
+      seen.add(lower);
+      result.push(trimmed);
+    }
+  };
+
+  // 1. Read saved departments from ozostack_departments_v1 (custom/created departments appear first)
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const raw = window.localStorage.getItem('ozostack_departments_v1');
+      if (raw !== null) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          parsed.forEach((d: { name?: string }) => add(d?.name));
+        }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // 2. Add any explicitly passed department names
+  extra.forEach(add);
+
+  // 3. Include departments from existing team members
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const rawMembers = window.localStorage.getItem('ozostack_team_members_v1');
+      if (rawMembers) {
+        const members = JSON.parse(rawMembers);
+        if (Array.isArray(members)) {
+          members.forEach((m: { department?: string }) => add(m?.department));
+        }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // 4. Include standard default departments
+  DEFAULT_DEPARTMENT_NAMES.forEach(add);
+
+  return result;
+}
+
+

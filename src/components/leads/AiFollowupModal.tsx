@@ -19,6 +19,7 @@ import { Lead } from '../../types/crm';
 import { useTheme } from '../../context/ThemeContext';
 import { useSystemCurrency } from '../../data/currencyService';
 import { LeadMessageTemplate, DEFAULT_TEMPLATES } from './LeadActionModal';
+import { sendDirectEmail, useSmtpConfig } from '../../data/emailService';
 
 interface AiFollowupModalProps {
   isOpen: boolean;
@@ -40,12 +41,14 @@ export const AiFollowupModal: React.FC<AiFollowupModalProps> = ({
 }) => {
   const { theme } = useTheme();
   const currency = useSystemCurrency();
+  const { config: smtpConfig } = useSmtpConfig();
   const isLight = theme === 'white-sky';
 
   const [tone, setTone] = useState<DraftTone>('executive');
   const [channel, setChannel] = useState<ChannelType>('email');
   const [copied, setCopied] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isSending, setIsSending] = useState(false);
 
   // Editable body & subject
   const [editedBody, setEditedBody] = useState('');
@@ -236,16 +239,23 @@ OZO STACK`,
     showToast(`Saved "${label}" to Message Templates!`);
   };
 
-  const handleSendViaEmail = () => {
-    const mailto = `mailto:${lead.email}?subject=${encodeURIComponent(
-      editedSubject
-    )}&body=${encodeURIComponent(editedBody)}`;
-    window.open(mailto, '_blank');
-    onLogActivity(
-      lead.id,
-      `AI Follow-up email sent (${tone} tone): "${editedSubject}"`
-    );
-    onClose();
+  const handleSendViaEmail = async () => {
+    setIsSending(true);
+    try {
+      const res = await sendDirectEmail({
+        to: lead.email,
+        subject: editedSubject,
+        body: editedBody,
+        recipientName: lead.name,
+      });
+      onLogActivity(
+        lead.id,
+        `AI Follow-up email sent from ${res.senderEmail} (${tone} tone): "${editedSubject}"`
+      );
+      onClose();
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const handleSendViaWhatsApp = () => {
@@ -531,10 +541,11 @@ OZO STACK`,
             {channel === 'email' ? (
               <button
                 onClick={handleSendViaEmail}
-                className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-sky-600 hover:bg-sky-500 rounded-lg shadow-sm shadow-sky-600/25 active:scale-95 transition-all"
+                disabled={isSending}
+                className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-sky-600 hover:bg-sky-500 disabled:opacity-50 rounded-lg shadow-sm shadow-sky-600/25 active:scale-95 transition-all"
               >
                 <Mail className="w-3.5 h-3.5" />
-                <span>Open in Email Client</span>
+                <span>{isSending ? 'Sending...' : `Send Direct Email (${smtpConfig.senderEmail})`}</span>
               </button>
             ) : (
               <button

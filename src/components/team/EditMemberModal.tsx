@@ -12,7 +12,13 @@ import {
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useSystemCurrency } from '../../data/currencyService';
-import { DepartmentType, EmployeeMember, EmploymentType, MemberStatus } from './teamMockData';
+import {
+  DepartmentType,
+  EmployeeMember,
+  EmploymentType,
+  MemberStatus,
+  getAvailableDepartmentNames,
+} from './teamMockData';
 
 interface EditMemberModalProps {
   isOpen: boolean;
@@ -20,6 +26,7 @@ interface EditMemberModalProps {
   onClose: () => void;
   onSave: (updated: EmployeeMember) => void;
   existingManagers: string[];
+  departments?: string[];
 }
 
 export const EditMemberModal: React.FC<EditMemberModalProps> = ({
@@ -28,6 +35,7 @@ export const EditMemberModal: React.FC<EditMemberModalProps> = ({
   onClose,
   onSave,
   existingManagers,
+  departments = [],
 }) => {
   const { theme } = useTheme();
   const currency = useSystemCurrency();
@@ -35,6 +43,15 @@ export const EditMemberModal: React.FC<EditMemberModalProps> = ({
 
   const [formData, setFormData] = useState<EmployeeMember | null>(null);
   const [skillsText, setSkillsText] = useState('');
+
+  const availableDepartments = React.useMemo(
+    () =>
+      getAvailableDepartmentNames([
+        ...(member?.department ? [member.department] : []),
+        ...departments,
+      ]),
+    [departments, member, isOpen]
+  );
 
   useEffect(() => {
     if (member) {
@@ -164,12 +181,11 @@ export const EditMemberModal: React.FC<EditMemberModalProps> = ({
                   onChange={(e) => setFormData({ ...formData, department: e.target.value as DepartmentType })}
                   className={`w-full pl-9 pr-3 py-2 rounded-xl text-xs border transition-colors outline-hidden focus:ring-2 focus:ring-sky-500/20 appearance-none ${inputBg}`}
                 >
-                  <option value="Engineering">Engineering</option>
-                  <option value="Product & Design">Product & Design</option>
-                  <option value="Sales & CRM">Sales & CRM</option>
-                  <option value="Marketing">Marketing</option>
-                  <option value="Finance & Operations">Finance & Operations</option>
-                  <option value="Human Resources">Human Resources</option>
+                  {availableDepartments.map((dept) => (
+                    <option key={dept} value={dept}>
+                      {dept}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MongoClient } from 'mongodb';
+import nodemailer from 'nodemailer';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,6 +17,7 @@ const DB_NAME = process.env.DB_NAME || 'ozo_one';
 const KV_COLLECTION = 'ozostack_crm_kv';
 const META_COLLECTION = 'ozostack_crm_meta';
 const MIGRATION_ID = 'ozostack_ai_studio_migrated_v1';
+const SMTP_KV_KEY = 'ozostack_smtp_config_v1';
 
 let dbInstance = null;
 let dbConnectPromise = null;
@@ -75,6 +77,43 @@ async function getDb() {
 
 // Kick off background DB connection on server boot
 getDb().catch(() => {});
+
+async function resolveSmtpConfig(bodyConfig) {
+  let stored = null;
+  try {
+    const db = await getDb();
+    if (db) {
+      const doc = await db.collection(KV_COLLECTION).findOne({ _id: SMTP_KV_KEY });
+      if (doc && typeof doc.value === 'string') {
+        stored = JSON.parse(doc.value);
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  const merged = {
+    senderName: process.env.SMTP_SENDER_NAME || 'OzoStack CRM',
+    senderEmail: process.env.SMTP_FROM || process.env.SMTP_USER || 'ozostack@gmail.com',
+    replyToEmail: process.env.SMTP_FROM || process.env.SMTP_USER || 'ozostack@gmail.com',
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: Number(process.env.SMTP_PORT) || 587,
+    encryption: 'TLS',
+    username: process.env.SMTP_USER || 'ozostack@gmail.com',
+    password: process.env.SMTP_PASS || '',
+    ...(stored || {}),
+    ...(bodyConfig || {}),
+  };
+
+  return merged;
+}
+
+function escapeHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -155,6 +194,85 @@ const server = http.createServer(async (req, res) => {
         dbConnected: Boolean(db),
         service: 'ozostack-crm-ai-studio',
       });
+      return;
+    }
+
+    // Direct SMTP Email Dispatch Endpoint
+    if (pathname === '/api/send-email' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const to = (body.to || '').trim();
+      const subject = (body.subject || 'Message from OzoStack CRM').trim();
+      const text = body.text || '';
+      const html = body.html || '';
+
+      if (!to) {
+        sendJson(res, 400, { ok: false, error: 'Recipient email address (to) is required.' });
+        return;
+      }
+
+      const cfg = await resolveSmtpConfig(body.smtpConfig);
+      const rawPassword = String(cfg.password || '').trim();
+
+      if (!rawPassword) {
+        sendJson(res, 200, {
+          ok: false,
+          needsPassword: true,
+          senderEmail: cfg.senderEmail,
+          error: 'SMTP App Password not configured yet.',
+        });
+        return;
+      }
+
+      const host = (cfg.host || 'smtp.gmail.com').trim();
+      const port = Number(cfg.port) || 587;
+      const isSecure = port === 465 || cfg.encryption === 'SSL';
+      const cleanPass = host.includes('gmail.com') ? rawPassword.replace(/\s+/g, '') : rawPassword;
+      const authUser = (cfg.username || cfg.senderEmail || 'ozostack@gmail.com').trim();
+
+      try {
+        const transporter = nodemailer.createTransport({
+          host,
+          port,
+          secure: isSecure,
+          auth: {
+            user: authUser,
+            pass: cleanPass,
+          },
+          tls: {
+            rejectUnauthorized: false,
+          },
+        });
+
+        const fromName = (cfg.senderName || 'OzoStack CRM').replace(/"/g, '');
+        const fromEmail = (cfg.senderEmail || authUser).trim();
+
+        const info = await transporter.sendMail({
+          from: `"${fromName}" <${fromEmail}>`,
+          to,
+          replyTo: body.replyTo || cfg.replyToEmail || fromEmail,
+          subject,
+          text,
+          html:
+            html ||
+            `<div style="font-family:Inter,Arial,sans-serif;font-size:14px;line-height:1.6;color:#0f172a;white-space:pre-wrap;">${escapeHtml(
+              text
+            )}</div>`,
+        });
+
+        sendJson(res, 200, {
+          ok: true,
+          sentViaSmtp: true,
+          messageId: info.messageId,
+          senderEmail: fromEmail,
+        });
+      } catch (smtpErr) {
+        sendJson(res, 200, {
+          ok: false,
+          sentViaSmtp: false,
+          senderEmail: cfg.senderEmail,
+          error: smtpErr?.message || 'SMTP transmission failed.',
+        });
+      }
       return;
     }
 

@@ -225,10 +225,17 @@ export const TeamView: React.FC = () => {
     return Array.from(new Set(employees.map((e) => e.name)));
   }, [employees]);
 
-  // Departments list for selectors
+  // Departments list for selectors (merges created departments, employee departments & defaults)
   const departmentNames = useMemo(() => {
-    return departments.map((d) => d.name);
-  }, [departments]);
+    const names = new Set<string>();
+    departments.forEach((d) => {
+      if (d?.name?.trim()) names.add(d.name.trim());
+    });
+    allEmployees.forEach((e) => {
+      if (e?.department?.trim()) names.add(e.department.trim());
+    });
+    return Array.from(names);
+  }, [departments, allEmployees]);
 
   // Executive KPI Calculations
   const kpis = useMemo(() => {
@@ -347,10 +354,14 @@ export const TeamView: React.FC = () => {
     if (!allow('edit')) return;
     setDepartments((prev) => {
       const exists = prev.some((d) => d.id === dept.id);
-      if (exists) {
-        return prev.map((d) => (d.id === dept.id ? dept : d));
-      }
-      return [...prev, dept];
+      const next = exists
+        ? prev.map((d) => (d.id === dept.id ? dept : d))
+        : [dept, ...prev];
+      try {
+        localStorage.setItem(STORAGE_DEPARTMENTS, JSON.stringify(next));
+        window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
+      } catch {}
+      return next;
     });
     showToast(`Department "${dept.name}" saved successfully.`);
   };
@@ -1972,6 +1983,26 @@ export const TeamView: React.FC = () => {
         onClose={() => setIsAddMemberModalOpen(false)}
         onAddMember={handleAddMember}
         existingManagers={managersList}
+        departments={departmentNames}
+        onCreateDepartment={(newDeptName) => {
+          const exists = departments.some(
+            (d) => d.name.trim().toLowerCase() === newDeptName.trim().toLowerCase()
+          );
+          if (!exists) {
+            handleSaveDepartment({
+              id: `dept-${Date.now()}`,
+              name: newDeptName.trim(),
+              head: managersList[0] || 'Sayed (CEO)',
+              headAvatar: 'DH',
+              memberCount: 0,
+              openPositions: 0,
+              monthlyBudget: 25000,
+              avgProductivity: 88,
+              description: `Department focusing on ${newDeptName.trim()} operations.`,
+              color: 'from-sky-500 to-indigo-600',
+            });
+          }
+        }}
       />
 
       <EditMemberModal
@@ -1983,6 +2014,7 @@ export const TeamView: React.FC = () => {
         }}
         onSave={handleUpdateMember}
         existingManagers={managersList}
+        departments={departmentNames}
       />
 
       <RequestLeaveModal

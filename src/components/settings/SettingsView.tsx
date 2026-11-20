@@ -28,6 +28,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Coins,
+  Mail,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
@@ -70,6 +71,7 @@ import {
   ATTENDANCE_TODAY,
   INITIAL_LEAVE_REQUESTS,
   INITIAL_JOB_REQUISITIONS,
+  getAvailableDepartmentNames,
 } from '../team/teamMockData';
 import {
   INITIAL_PAYROLL_RECORDS,
@@ -79,17 +81,10 @@ import {
 import { INITIAL_NOTIFICATIONS } from '../../data/notificationService';
 import { CrmSetupSection } from './CrmSetupSection';
 import { LeadFormBuilderSection } from './LeadFormBuilderSection';
+import { SmtpSettingsSection } from './SmtpSettingsSection';
+import { useSmtpConfig } from '../../data/emailService';
 
-type TabId = 'my-account' | 'staff' | 'roles' | 'crm-config' | 'lead-forms' | 'company' | 'security' | 'danger-zone';
-
-const DEPARTMENTS = [
-  'Engineering',
-  'Sales & CRM',
-  'Marketing',
-  'Product & Design',
-  'Human Resources',
-  'Finance & Operations',
-];
+type TabId = 'my-account' | 'staff' | 'roles' | 'smtp' | 'crm-config' | 'lead-forms' | 'company' | 'security' | 'danger-zone';
 
 const PAGE_SIZE = 20;
 
@@ -120,6 +115,12 @@ export const SettingsView: React.FC = () => {
   const isAdmin = can('Settings', 'edit');
   const [activeTab, setActiveTab] = useState<TabId>(isAdmin ? 'staff' : 'my-account');
   const [toast, setToast] = useState<string | null>(null);
+  const { config: smtpConfig } = useSmtpConfig();
+
+  const DEPARTMENTS = useMemo(
+    () => getAvailableDepartmentNames(users.map((u) => u.department)),
+    [users, activeTab]
+  );
 
   const notify = (msg: string) => {
     setToast(msg);
@@ -502,6 +503,7 @@ export const SettingsView: React.FC = () => {
 
   const tabs: { id: TabId; label: string; icon: React.ComponentType<{ className?: string }>; show: boolean }[] = [
     { id: 'my-account', label: 'My Account & Login', icon: UserCheck, show: true },
+    { id: 'smtp', label: `Email & SMTP (${smtpConfig.senderEmail})`, icon: Mail, show: true },
     { id: 'staff', label: `Staff Logins (${users.length}/${MAX_STAFF_CAPACITY})`, icon: Users, show: isAdmin },
     { id: 'roles', label: `Roles & Permissions (${roles.length})`, icon: KeyRound, show: isAdmin },
     { id: 'crm-config', label: 'CRM, Lead & Pipeline Setup', icon: Sliders, show: isAdmin },
@@ -1503,6 +1505,11 @@ export const SettingsView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* =================================================================== */}
+      {/* TAB: EMAIL & DIRECT SMTP INTEGRATION                                */}
+      {/* =================================================================== */}
+      {activeTab === 'smtp' && <SmtpSettingsSection onNotify={notify} />}
 
       {/* =================================================================== */}
       {/* TAB: CRM, LEAD SOURCES, STAGES, PIPELINE & CUSTOM FIELDS            */}

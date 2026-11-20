@@ -14,7 +14,7 @@ ENV NODE_ENV=production
 ENV PORT=8080
 ENV HOSTNAME="0.0.0.0"
 
-RUN npm init -y > /dev/null && npm install mongodb@6.6.0 --no-save
+RUN npm init -y > /dev/null && npm install mongodb@6.6.0 nodemailer@6.9.16 --no-save
 
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/dist ./dist

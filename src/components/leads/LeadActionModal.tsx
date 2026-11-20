@@ -19,6 +19,7 @@ import {
 import { Lead, LeadStatus } from '../../types/crm';
 import { useTheme } from '../../context/ThemeContext';
 import { useSystemCurrency } from '../../data/currencyService';
+import { sendDirectEmail, useSmtpConfig } from '../../data/emailService';
 
 export type ContactActionType = 'whatsapp' | 'email' | 'call';
 
@@ -111,9 +112,11 @@ export const LeadActionModal: React.FC<LeadActionModalProps> = ({
 }) => {
   const { theme } = useTheme();
   const currency = useSystemCurrency();
+  const { config: smtpConfig } = useSmtpConfig();
   const isLight = theme === 'white-sky';
 
   const [copied, setCopied] = useState(false);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [callOutcome, setCallOutcome] = useState('Connected - Productive Discussion');
   const [customMessage, setCustomMessage] = useState('');
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('stage_proposal');
@@ -271,17 +274,29 @@ export const LeadActionModal: React.FC<LeadActionModalProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleExecuteAction = () => {
+  const handleExecuteAction = async () => {
     if (actionType === 'whatsapp') {
       const waUrl = `https://wa.me/${cleanWhatsappNumber}?text=${encodeURIComponent(customMessage)}`;
       window.open(waUrl, '_blank');
       onLogActivity?.(lead.id, `Sent WhatsApp message: "${customMessage.slice(0, 70)}..."`);
+      onClose();
     } else if (actionType === 'email') {
-      const mailtoUrl = `mailto:${lead.email}?subject=${encodeURIComponent(
-        emailSubject || `OZO STACK - ${lead.company}`
-      )}&body=${encodeURIComponent(customMessage)}`;
-      window.open(mailtoUrl, '_blank');
-      onLogActivity?.(lead.id, `Sent Email: "${emailSubject}"`);
+      setIsSendingEmail(true);
+      try {
+        const res = await sendDirectEmail({
+          to: lead.email,
+          subject: emailSubject || `OZO STACK - ${lead.company}`,
+          body: customMessage,
+          recipientName: lead.name,
+        });
+        onLogActivity?.(
+          lead.id,
+          `Sent Email from ${res.senderEmail} to ${lead.email}: "${emailSubject || `OZO STACK - ${lead.company}`}"`
+        );
+        onClose();
+      } finally {
+        setIsSendingEmail(false);
+      }
     } else if (actionType === 'call') {
       const telUrl = `tel:${lead.phone.replace(/[^0-9+]/g, '')}`;
       window.location.href = telUrl;
@@ -289,8 +304,8 @@ export const LeadActionModal: React.FC<LeadActionModalProps> = ({
         lead.id,
         `Placed Call to ${lead.name} (${lead.phone}) - Outcome: ${callOutcome}`
       );
+      onClose();
     }
-    onClose();
   };
 
   return (
@@ -335,6 +350,11 @@ export const LeadActionModal: React.FC<LeadActionModalProps> = ({
               </div>
               <p className="text-xs text-slate-400">
                 Contacting {lead.name} · {lead.company}
+                {actionType === 'email' && (
+                  <span className="ml-1.5 text-sky-400 font-semibold">
+                    (From: {smtpConfig.senderEmail})
+                  </span>
+                )}
               </p>
             </div>
           </div>
@@ -616,7 +636,7 @@ export const LeadActionModal: React.FC<LeadActionModalProps> = ({
             {actionType === 'email' && (
               <>
                 <Send className="w-3.5 h-3.5" />
-                <span>Send Email</span>
+                <span>{isSendingEmail ? 'Sending Email...' : 'Send Direct Email'}</span>
               </>
             )}
             {actionType === 'call' && (

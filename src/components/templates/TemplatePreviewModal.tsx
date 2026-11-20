@@ -16,6 +16,7 @@ import { renderTemplateText } from '../../data/templateData';
 import { INITIAL_LEADS } from '../../data/mockData';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
+import { sendDirectEmail, useSmtpConfig } from '../../data/emailService';
 
 interface TemplatePreviewModalProps {
   isOpen: boolean;
@@ -33,6 +34,8 @@ export const TemplatePreviewModal: React.FC<TemplatePreviewModalProps> = ({
   const { theme } = useTheme();
   const isDark = theme === 'midnight';
   const { currentUser } = useAuth();
+  const { config: smtpConfig } = useSmtpConfig();
+  const [isSending, setIsSending] = useState(false);
 
   // Load leads from localStorage with fallback
   const leadsList = useMemo(() => {
@@ -91,7 +94,7 @@ export const TemplatePreviewModal: React.FC<TemplatePreviewModalProps> = ({
     setTimeout(() => setCopiedSubject(false), 2000);
   };
 
-  const handleLaunchExternal = () => {
+  const handleLaunchExternal = async () => {
     if (onUsed) onUsed(template.id);
 
     if (template.channel === 'whatsapp') {
@@ -104,10 +107,18 @@ export const TemplatePreviewModal: React.FC<TemplatePreviewModalProps> = ({
       window.open(url, '_blank');
     } else {
       const toEmail = selectedLead?.email || '';
-      const encodedSub = encodeURIComponent(renderedSubject);
-      const encodedBody = encodeURIComponent(renderedBody);
-      const mailtoUrl = `mailto:${toEmail}?subject=${encodedSub}&body=${encodedBody}`;
-      window.location.href = mailtoUrl;
+      setIsSending(true);
+      try {
+        await sendDirectEmail({
+          to: toEmail,
+          subject: renderedSubject,
+          body: renderedBody,
+          recipientName: selectedLead?.name,
+        });
+        onClose();
+      } finally {
+        setIsSending(false);
+      }
     }
   };
 
@@ -275,7 +286,11 @@ export const TemplatePreviewModal: React.FC<TemplatePreviewModalProps> = ({
               }`}
             >
               <span>
-                {template.channel === 'whatsapp' ? 'Open in WhatsApp Web' : 'Open in Email Client'}
+                {template.channel === 'whatsapp'
+                  ? 'Open in WhatsApp Web'
+                  : isSending
+                  ? 'Sending Email...'
+                  : `Send Direct Email (${smtpConfig.senderEmail})`}
               </span>
               <ExternalLink className="w-3.5 h-3.5" />
             </button>
