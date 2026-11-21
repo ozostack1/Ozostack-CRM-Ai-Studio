@@ -633,17 +633,36 @@ export async function pollWaSessionStatus(fullSync = false): Promise<{
         },
         activeUser.id
       );
-    } else if (data.status === 'disconnected') {
-      const currentCfg = getWaConfig(activeUser.id);
-      if (currentCfg.qrConnected) {
-        saveWaConfig({ qrConnected: false }, activeUser.id);
-      }
+
+      const { newMessagesCount, syncedChatsCount } = mergeServerSyncData({
+        incomingMessages: data.incomingMessages,
+        syncedChats: data.syncedChats,
+      });
+
+      return {
+        ok: true,
+        status: 'connected',
+        qrDataUrl: data.qrDataUrl,
+        phoneNumber: data.phoneNumber,
+        pushName: data.pushName,
+        newMessagesCount,
+        syncedChatsCount,
+      };
     }
 
-    const { newMessagesCount, syncedChatsCount } = mergeServerSyncData({
-      incomingMessages: data.incomingMessages,
-      syncedChats: data.syncedChats,
-    });
+    // Not connected via QR: if Meta Cloud API is not configured, ensure stale synced chats/groups are cleared
+    const currentCfg = getWaConfig(activeUser.id);
+    if (currentCfg.qrConnected) {
+      saveWaConfig({ qrConnected: false, connectedPhone: '', connectedName: '' }, activeUser.id);
+    }
+    const isMetaActive = Boolean(
+      currentCfg.mode === 'meta_api' &&
+        currentCfg.metaPhoneNumberId.trim() &&
+        currentCfg.metaAccessToken.trim()
+    );
+    if (!isMetaActive && getWaConversations(activeUser.id).length > 0) {
+      saveWaConversations([], activeUser.id);
+    }
 
     const mappedStatus =
       data.status === 'qr_pending' && data.qrDataUrl ? 'qr_ready' : data.status || 'disconnected';
@@ -654,8 +673,8 @@ export async function pollWaSessionStatus(fullSync = false): Promise<{
       qrDataUrl: data.qrDataUrl,
       phoneNumber: data.phoneNumber,
       pushName: data.pushName,
-      newMessagesCount,
-      syncedChatsCount,
+      newMessagesCount: 0,
+      syncedChatsCount: 0,
     };
   } catch {
     return { ok: false, status: 'disconnected', newMessagesCount: 0, syncedChatsCount: 0 };
@@ -670,6 +689,14 @@ export async function disconnectWaSession(): Promise<void> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId: activeUser.id }),
     });
+  } catch {
+    /* ignore */
+  }
+  saveWaConversations([], activeUser.id);
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.removeItem(getWaChatsKey(activeUser.id));
+    }
   } catch {
     /* ignore */
   }

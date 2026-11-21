@@ -441,17 +441,99 @@ function registerWaLidMapping(session, jidA, jidB) {
   if (!jidA || !jidB) return;
   const a = String(jidA);
   const b = String(jidB);
+  let lidKey = '';
+  let phoneDigits = '';
   if (a.endsWith('@lid') && b.includes('@s.whatsapp.net')) {
-    const lidKey = a.split(':')[0].split('@')[0];
-    const phoneDigits = normalizeWaDigits(b);
-    if (lidKey && isValidDirectPhoneDigits(phoneDigits)) {
-      session.lidToPhone.set(lidKey, phoneDigits);
-    }
+    lidKey = a.split(':')[0].split('@')[0].replace(/[^0-9]/g, '');
+    phoneDigits = normalizeWaDigits(b);
   } else if (b.endsWith('@lid') && a.includes('@s.whatsapp.net')) {
-    const lidKey = b.split(':')[0].split('@')[0];
-    const phoneDigits = normalizeWaDigits(a);
-    if (lidKey && isValidDirectPhoneDigits(phoneDigits)) {
-      session.lidToPhone.set(lidKey, phoneDigits);
+    lidKey = b.split(':')[0].split('@')[0].replace(/[^0-9]/g, '');
+    phoneDigits = normalizeWaDigits(a);
+  }
+  if (!lidKey || !isValidDirectPhoneDigits(phoneDigits)) return;
+
+  session.lidToPhone.set(lidKey, phoneDigits);
+
+  // Retroactively merge any contact, chat, or message stored under lidKey into phoneDigits
+  if (session.contactsMap.has(lidKey)) {
+    const lidContact = session.contactsMap.get(lidKey);
+    const pnContact = session.contactsMap.get(phoneDigits);
+    const bestName =
+      (pnContact?.name && !String(pnContact.name).startsWith('+') ? pnContact.name : '') ||
+      (lidContact?.name && !String(lidContact.name).startsWith('+') ? lidContact.name : '') ||
+      pnContact?.notify ||
+      lidContact?.notify ||
+      `+${phoneDigits}`;
+    session.contactsMap.set(phoneDigits, {
+      id: phoneDigits,
+      phone: `+${phoneDigits}`,
+      jid: `${phoneDigits}@s.whatsapp.net`,
+      name: bestName,
+      notify: pnContact?.notify || lidContact?.notify || '',
+    });
+    session.contactsMap.delete(lidKey);
+  }
+
+  if (session.chatsMap.has(lidKey)) {
+    const lidChat = session.chatsMap.get(lidKey);
+    const pnChat = session.chatsMap.get(phoneDigits);
+    const contactInfo = session.contactsMap.get(phoneDigits);
+    const bestName =
+      (pnChat?.name && !String(pnChat.name).startsWith('+') ? pnChat.name : '') ||
+      (lidChat?.name && !String(lidChat.name).startsWith('+') ? lidChat.name : '') ||
+      (contactInfo?.name && !String(contactInfo.name).startsWith('+') ? contactInfo.name : '') ||
+      `+${phoneDigits}`;
+    session.chatsMap.set(phoneDigits, {
+      ...(lidChat || {}),
+      ...(pnChat || {}),
+      id: phoneDigits,
+      isGroup: false,
+      phone: `+${phoneDigits}`,
+      jid: `${phoneDigits}@s.whatsapp.net`,
+      name: bestName,
+      unreadCount: (pnChat?.unreadCount || 0) + (lidChat?.unreadCount || 0),
+    });
+    session.chatsMap.delete(lidKey);
+  }
+
+  for (const [, msg] of session.messagesMap.entries()) {
+    if (msg && msg.chatId === lidKey) {
+      msg.chatId = phoneDigits;
+      msg.phone = `+${phoneDigits}`;
+      msg.contactPhone = `+${phoneDigits}`;
+      const c = session.contactsMap.get(phoneDigits);
+      if (c?.name && !String(c.name).startsWith('+') && String(msg.contactName || '').startsWith('+')) {
+        msg.contactName = c.name;
+        msg.pushName = c.name;
+      }
+    }
+  }
+}
+
+function registerAllJidMappingsFromObject(session, obj) {
+  if (!obj || typeof obj !== 'object') return;
+  const candidates = [
+    obj.id,
+    obj.jid,
+    obj.lid,
+    obj.lidJid,
+    obj.pnJid,
+    obj.phoneNumber,
+    obj.newJid,
+    obj.oldJid,
+    obj.senderPn,
+    obj.participantPn,
+    obj.remoteJid,
+    obj.remoteJidAlt,
+  ]
+    .filter(Boolean)
+    .map(String);
+
+  const lidJids = candidates.filter((c) => c.endsWith('@lid'));
+  const pnJids = candidates.filter((c) => c.includes('@s.whatsapp.net'));
+  for (const lid of lidJids) {
+    for (const pn of pnJids) {
+      registerWaLidMapping(session, lid, pn);
     }
   }
 }
@@ -519,9 +601,9 @@ function resolveWaJidToIdentity(session, rawJid, altJid) {
 
 function upsertWaServerContact(session, rawContact) {
   if (!rawContact) return;
-  registerWaLidMapping(session, rawContact.id, rawContact.lid || rawContact.phoneNumber || rawContact.jid);
+  registerAllJidMappingsFromObject(session, rawContact);
   const primaryJid =
-    rawContact.phoneNumber || rawContact.id || rawContact.jid || rawContact.lid;
+    rawContact.phoneNumber || rawContact.pnJid || rawContact.id || rawContact.jid || rawContact.lid;
   const secondaryJid =
     rawContact.id !== primaryJid ? rawContact.id : rawContact.lid || rawContact.phoneNumber;
   const identity = resolveWaJidToIdentity(session, primaryJid, secondaryJid);
@@ -544,22 +626,27 @@ function upsertWaServerContact(session, rawContact) {
 
   if (!cleanName && !existing) return;
 
+  const resolvedName = cleanName || existing?.name || identity.phone;
   session.contactsMap.set(identity.digits, {
     id: identity.digits,
     phone: identity.phone,
     jid: identity.jid,
-    name: cleanName || existing?.name || identity.phone,
+    name: resolvedName,
     notify: rawContact.notify || rawContact.pushName || existing?.notify || '',
   });
+
+  // Also enrich existing chat name if chat currently has a raw +number name
+  if (cleanName && session.chatsMap.has(identity.digits)) {
+    const ch = session.chatsMap.get(identity.digits);
+    if (ch && (!ch.name || String(ch.name).startsWith('+'))) {
+      ch.name = cleanName;
+    }
+  }
 }
 
 function upsertWaServerChat(session, rawChat) {
   if (!rawChat) return;
-  registerWaLidMapping(
-    session,
-    rawChat.id || rawChat.lidJid,
-    rawChat.pnJid || rawChat.phoneNumber
-  );
+  registerAllJidMappingsFromObject(session, rawChat);
   const identity = resolveWaJidToIdentity(
     session,
     rawChat.pnJid || rawChat.phoneNumber || rawChat.id || rawChat.jid,
@@ -1046,8 +1133,29 @@ async function startBaileysSocket(session) {
           session.qrDataUrl = '';
           session.phoneNumber = '';
           session.pushName = '';
+          session.incomingMessages = [];
+          session.messagesMap.clear();
+          session.contactsMap.clear();
+          session.chatsMap.clear();
+          session.lidToPhone.clear();
           try {
             fs.rmSync(session.authDir, { recursive: true, force: true });
+          } catch {
+            /* ignore */
+          }
+          try {
+            const db = await getDb();
+            if (db) {
+              await db.collection(KV_COLLECTION).deleteMany({
+                _id: {
+                  $in: [
+                    `server_wa_store_v1_${session.userId}`,
+                    `server_wa_auth_v1_${session.userId}`,
+                    `ozostack_wa_chats_user_v1_${session.userId}`,
+                  ],
+                },
+              });
+            }
           } catch {
             /* ignore */
           }
@@ -1462,10 +1570,30 @@ const server = http.createServer(async (req, res) => {
         session.qrDataUrl = '';
       }
 
-      // If user asks for a fresh QR and isn't connected, reset stale socket
+      // If user asks for a fresh QR and isn't connected, reset stale socket & old cached data
       if (session.status !== 'connected' && (!session.sock || !session.qrDataUrl)) {
+        session.incomingMessages = [];
+        session.messagesMap.clear();
+        session.contactsMap.clear();
+        session.chatsMap.clear();
+        session.lidToPhone.clear();
         try {
           fs.rmSync(session.authDir, { recursive: true, force: true });
+        } catch {
+          /* ignore */
+        }
+        try {
+          const db = await getDb();
+          if (db) {
+            await db.collection(KV_COLLECTION).deleteMany({
+              _id: {
+                $in: [
+                  `server_wa_store_v1_${session.userId}`,
+                  `server_wa_auth_v1_${session.userId}`,
+                ],
+              },
+            });
+          }
         } catch {
           /* ignore */
         }
@@ -1505,17 +1633,31 @@ const server = http.createServer(async (req, res) => {
       }
 
       const session = getOrCreateWaSessionEntry(userId);
-      if (session.chatsMap.size === 0 && session.messagesMap.size === 0) {
-        await loadWaSessionCacheFromDb(session);
-      }
 
       // Auto-resume Baileys socket if creds exist on disk or in MongoDB and socket isn't running
       if (!session.sock && !session.starting && session.status === 'disconnected') {
         const hasAuth = await restoreWaAuthFromDb(session);
         const credsFile = path.join(session.authDir, 'creds.json');
         if (hasAuth || fs.existsSync(credsFile)) {
+          await loadWaSessionCacheFromDb(session);
           startBaileysSocket(session).catch(() => {});
         }
+      }
+
+      // If user is NOT connected, never return stale cached chats or messages
+      if (session.status !== 'connected') {
+        sendJson(res, 200, {
+          ok: true,
+          status: session.status,
+          qrDataUrl: session.qrDataUrl,
+          phoneNumber: '',
+          pushName: '',
+          incomingMessages: [],
+          syncedChats: [],
+          totalChats: 0,
+          totalMessages: 0,
+        });
+        return;
       }
 
       // Flush any buffered Baileys events immediately
@@ -1758,6 +1900,7 @@ const server = http.createServer(async (req, res) => {
                   $in: [
                     `server_wa_store_v1_${session.userId}`,
                     `server_wa_auth_v1_${session.userId}`,
+                    `ozostack_wa_chats_user_v1_${session.userId}`,
                   ],
                 },
               });

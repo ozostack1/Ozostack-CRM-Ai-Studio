@@ -425,7 +425,12 @@ export const WhatsAppCenterView: React.FC = () => {
     await disconnectWaSession();
     setQrStatus('disconnected');
     setQrDataUrl(null);
-    showBanner('info', 'WhatsApp Unlinked', 'Your WhatsApp session has been disconnected.');
+    setSelectedChatId(null);
+    showBanner(
+      'info',
+      'WhatsApp Unlinked & Chats Cleared',
+      'Your WhatsApp session and synced chats/groups have been cleared.'
+    );
   };
 
   const handleSaveMetaApi = (e: React.FormEvent) => {
