@@ -4,6 +4,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MongoClient } from 'mongodb';
 import nodemailer from 'nodemailer';
+import { ImapFlow } from 'imapflow';
+import { simpleParser } from 'mailparser';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -36,7 +38,6 @@ async function getDb() {
       await client.connect();
       const db = client.db(DB_NAME);
 
-      // One-time cleanup of legacy Ozo-One-CRM collections so new CRM starts clean
       try {
         const metaCol = db.collection(META_COLLECTION);
         const migrated = await metaCol.findOne({ _id: MIGRATION_ID });
@@ -56,7 +57,6 @@ async function getDb() {
             { $set: { migratedAt: new Date().toISOString() } },
             { upsert: true }
           );
-          console.log('[MongoDB] Legacy Ozo-One-CRM collections cleaned.');
         }
       } catch (cleanupErr) {
         console.warn('[MongoDB] Legacy collection cleanup warning:', cleanupErr?.message);
@@ -75,7 +75,6 @@ async function getDb() {
   return dbConnectPromise;
 }
 
-// Kick off background DB connection on server boot
 getDb().catch(() => {});
 
 async function resolveSmtpConfig(bodyConfig) {
@@ -92,20 +91,73 @@ async function resolveSmtpConfig(bodyConfig) {
     /* ignore */
   }
 
-  const merged = {
+  return {
     senderName: process.env.SMTP_SENDER_NAME || 'OzoStack CRM',
     senderEmail: process.env.SMTP_FROM || process.env.SMTP_USER || 'ozostack@gmail.com',
     replyToEmail: process.env.SMTP_FROM || process.env.SMTP_USER || 'ozostack@gmail.com',
     host: process.env.SMTP_HOST || 'smtp.gmail.com',
     port: Number(process.env.SMTP_PORT) || 587,
+    imapHost: process.env.IMAP_HOST || '',
+    imapPort: Number(process.env.IMAP_PORT) || 993,
     encryption: 'TLS',
     username: process.env.SMTP_USER || 'ozostack@gmail.com',
     password: process.env.SMTP_PASS || '',
     ...(stored || {}),
     ...(bodyConfig || {}),
   };
+}
 
-  return merged;
+function isPlaceholderPassword(pw) {
+  const s = String(pw || '').trim();
+  return !s || s === 'ozo-smtp-connected-v1' || s.startsWith('••••');
+}
+
+function buildNodemailerTransport(cfg) {
+  const host = (cfg.host || 'smtp.gmail.com').trim();
+  const port = Number(cfg.port) || 587;
+  const isSecure = port === 465 || cfg.encryption === 'SSL';
+  const rawPassword = String(cfg.password || '').trim();
+  const cleanPass = host.includes('gmail.com') ? rawPassword.replace(/\s+/g, '') : rawPassword;
+  const authUser = (cfg.username || cfg.senderEmail || 'ozostack@gmail.com').trim();
+
+  return {
+    host,
+    port,
+    isSecure,
+    authUser,
+    cleanPass,
+    transporter: nodemailer.createTransport({
+      host,
+      port,
+      secure: isSecure,
+      auth: {
+        user: authUser,
+        pass: cleanPass,
+      },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
+      tls: {
+        rejectUnauthorized: false,
+      },
+    }),
+  };
+}
+
+function inferImapHost(cfg) {
+  if (cfg.imapHost && String(cfg.imapHost).trim()) {
+    return String(cfg.imapHost).trim();
+  }
+  const smtpHost = String(cfg.host || '').toLowerCase();
+  const email = String(cfg.senderEmail || '').toLowerCase();
+  if (smtpHost.includes('hostinger')) return 'imap.hostinger.com';
+  if (smtpHost.includes('titan')) return 'imap.titan.email';
+  if (smtpHost.includes('zoho.in')) return 'imap.zoho.in';
+  if (smtpHost.includes('zoho')) return 'imap.zoho.com';
+  if (smtpHost.includes('office365') || smtpHost.includes('outlook')) return 'outlook.office365.com';
+  if (smtpHost.includes('gmail') || email.endsWith('@gmail.com')) return 'imap.gmail.com';
+  if (smtpHost.startsWith('smtp.')) return smtpHost.replace(/^smtp\./, 'imap.');
+  return 'imap.hostinger.com';
 }
 
 function escapeHtml(str) {
@@ -197,10 +249,54 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Verify real SMTP credentials
+    if (pathname === '/api/verify-smtp' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const cfg = await resolveSmtpConfig(body.smtpConfig);
+
+      if (isPlaceholderPassword(cfg.password)) {
+        sendJson(res, 200, {
+          ok: false,
+          verified: false,
+          code: 'NO_PASSWORD',
+          error:
+            'Please enter your real email password (for @ozostack.in Domain Mail) or 16-digit Google App Password (for @gmail.com) to authenticate live SMTP.',
+        });
+        return;
+      }
+
+      const { transporter, host, port, authUser } = buildNodemailerTransport(cfg);
+      try {
+        await transporter.verify();
+        sendJson(res, 200, {
+          ok: true,
+          verified: true,
+          host,
+          port,
+          authUser,
+          message: `Live SMTP Verified! Connected to ${host}:${port} as ${authUser}.`,
+        });
+      } catch (err) {
+        const msg = err?.message || 'SMTP verification failed.';
+        const isGmail = host.includes('gmail.com');
+        sendJson(res, 200, {
+          ok: false,
+          verified: false,
+          code: 'AUTH_FAILED',
+          error: isGmail
+            ? `Gmail SMTP rejected the password (${msg}). Note: Gmail requires a 16-digit Google App Password from myaccount.google.com/apppasswords, OR use your @ozostack.in Domain Mail (Hostinger/Titan) with your normal email password.`
+            : `SMTP authentication failed on ${host}:${port} — ${msg}`,
+        });
+      }
+      return;
+    }
+
     // Direct SMTP Email Dispatch Endpoint
     if (pathname === '/api/send-email' && req.method === 'POST') {
       const body = await readJsonBody(req);
       const to = (body.to || '').trim();
+      const cc = (body.cc || '').trim();
+      const bcc = (body.bcc || '').trim();
       const subject = (body.subject || 'Message from OzoStack CRM').trim();
       const text = body.text || '';
       const html = body.html || '';
@@ -211,12 +307,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const cfg = await resolveSmtpConfig(body.smtpConfig);
-      const rawPassword = String(cfg.password || '').trim();
-      const host = (cfg.host || 'smtp.gmail.com').trim();
-      const port = Number(cfg.port) || 587;
-      const isSecure = port === 465 || cfg.encryption === 'SSL';
-      const cleanPass = host.includes('gmail.com') ? rawPassword.replace(/\s+/g, '') : rawPassword;
-      const authUser = (cfg.username || cfg.senderEmail || 'ozostack@gmail.com').trim();
+      const { transporter, host, port, authUser, cleanPass } = buildNodemailerTransport(cfg);
       const fromName = (cfg.senderName || 'OzoStack CRM').replace(/"/g, '');
       const fromEmail = (cfg.senderEmail || authUser || 'ozostack@gmail.com').trim();
       const renderedHtml =
@@ -225,81 +316,169 @@ const server = http.createServer(async (req, res) => {
           text
         )}</div>`;
 
-      let messageId = `<${Date.now()}.${Math.random().toString(36).slice(2, 8)}@ozostack.in>`;
-      let deliveredMode = 'smtp-relay';
-
-      // Attempt live SMTP transport if real credentials are provided
-      if (
-        cleanPass &&
-        cleanPass !== 'ozo-smtp-connected-v1' &&
-        !cleanPass.startsWith('••••')
-      ) {
-        try {
-          const transporter = nodemailer.createTransport({
-            host,
-            port,
-            secure: isSecure,
-            auth: {
-              user: authUser,
-              pass: cleanPass,
-            },
-            tls: {
-              rejectUnauthorized: false,
-            },
-          });
-
-          const info = await transporter.sendMail({
-            from: `"${fromName}" <${fromEmail}>`,
-            to,
-            replyTo: body.replyTo || cfg.replyToEmail || fromEmail,
-            subject,
-            text,
-            html: renderedHtml,
-          });
-          if (info && info.messageId) {
-            messageId = info.messageId;
-          }
-          deliveredMode = 'smtp-direct';
-        } catch (smtpErr) {
-          console.warn('[SMTP Fallback Relay Activated]:', smtpErr?.message);
-        }
+      if (isPlaceholderPassword(cleanPass)) {
+        sendJson(res, 200, {
+          ok: false,
+          sentViaSmtp: false,
+          realExternalDelivery: false,
+          code: 'NO_PASSWORD',
+          senderEmail: fromEmail,
+          error:
+            'Real SMTP password is not entered yet. Enter your @ozostack.in Domain Mail password or 16-digit Gmail App Password in Mail Settings for direct inbox delivery.',
+        });
+        return;
       }
 
-      // Persist outbound email record in MongoDB
       try {
-        const db = await getDb();
-        if (db) {
-          await db.collection('ozostack_crm_meta').updateOne(
-            { _id: `email_${Date.now()}_${Math.random().toString(36).slice(2, 7)}` },
-            {
-              $set: {
-                type: 'outbound_email',
-                from: fromEmail,
-                fromName,
-                to,
-                subject,
-                text,
-                host,
-                port,
-                messageId,
-                deliveredMode,
-                sentAt: new Date().toISOString(),
-              },
-            },
-            { upsert: true }
-          );
-        }
-      } catch {
-        /* ignore */
+        const mailOptions = {
+          from: `"${fromName}" <${fromEmail}>`,
+          to,
+          replyTo: body.replyTo || cfg.replyToEmail || fromEmail,
+          subject,
+          text,
+          html: renderedHtml,
+        };
+        if (cc) mailOptions.cc = cc;
+        if (bcc) mailOptions.bcc = bcc;
+
+        const info = await transporter.sendMail(mailOptions);
+
+        sendJson(res, 200, {
+          ok: true,
+          sentViaSmtp: true,
+          realExternalDelivery: true,
+          messageId: info.messageId,
+          senderEmail: fromEmail,
+          mode: 'smtp-direct',
+        });
+      } catch (smtpErr) {
+        const msg = smtpErr?.message || 'SMTP transmission failed.';
+        const isGmail = host.includes('gmail.com');
+        sendJson(res, 200, {
+          ok: false,
+          sentViaSmtp: false,
+          realExternalDelivery: false,
+          code: 'AUTH_FAILED',
+          senderEmail: fromEmail,
+          error: isGmail
+            ? `Gmail rejected the password (535 BadCredentials). For @gmail.com you must paste a 16-character Google App Password (myaccount.google.com/apppasswords), OR switch to your @ozostack.in Domain Mail (Hostinger/Titan) which works with your normal email password.`
+            : `SMTP Error (${host}:${port}): ${msg}`,
+        });
+      }
+      return;
+    }
+
+    // Real IMAP Inbox Sync Endpoint (fetches actual incoming emails from Domain Mail / Gmail)
+    if (pathname === '/api/sync-inbox' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const cfg = await resolveSmtpConfig(body.smtpConfig);
+      const rawPassword = String(cfg.password || '').trim();
+
+      if (isPlaceholderPassword(rawPassword)) {
+        sendJson(res, 200, {
+          ok: false,
+          synced: false,
+          code: 'NO_PASSWORD',
+          error:
+            'Enter your Domain Mail (@ozostack.in) password or 16-digit Gmail App Password in Mail Settings to sync live incoming emails via IMAP.',
+        });
+        return;
       }
 
-      sendJson(res, 200, {
-        ok: true,
-        sentViaSmtp: true,
-        messageId,
-        senderEmail: fromEmail,
-        mode: deliveredMode,
+      const imapHost = inferImapHost(cfg);
+      const imapPort = Number(cfg.imapPort) || 993;
+      const authUser = (cfg.username || cfg.senderEmail || '').trim();
+      const cleanPass = imapHost.includes('gmail.com')
+        ? rawPassword.replace(/\s+/g, '')
+        : rawPassword;
+
+      const client = new ImapFlow({
+        host: imapHost,
+        port: imapPort,
+        secure: imapPort === 993,
+        auth: {
+          user: authUser,
+          pass: cleanPass,
+        },
+        logger: false,
+        tls: {
+          rejectUnauthorized: false,
+        },
       });
+
+      try {
+        await client.connect();
+        const lock = await client.getMailboxLock('INBOX');
+        const messages = [];
+        try {
+          const total = client.mailbox.exists || 0;
+          if (total > 0) {
+            const startSeq = Math.max(1, total - 19);
+            for await (const msg of client.fetch(`${startSeq}:*`, {
+              uid: true,
+              flags: true,
+              envelope: true,
+              source: true,
+            })) {
+              try {
+                const parsed = await simpleParser(msg.source);
+                const fromAddr =
+                  parsed.from?.value?.[0]?.address ||
+                  msg.envelope?.from?.[0]?.address ||
+                  'unknown@sender.com';
+                const fromName =
+                  parsed.from?.value?.[0]?.name ||
+                  msg.envelope?.from?.[0]?.name ||
+                  fromAddr.split('@')[0];
+                const toAddr =
+                  parsed.to?.value?.[0]?.address ||
+                  msg.envelope?.to?.[0]?.address ||
+                  authUser;
+                const isSeen = msg.flags && msg.flags.has('\\Seen');
+
+                messages.push({
+                  id: `imap-${imapHost}-${msg.uid}`,
+                  messageId: parsed.messageId || `uid-${msg.uid}`,
+                  folder: 'inbox',
+                  fromName,
+                  fromEmail: fromAddr,
+                  toEmail: toAddr,
+                  subject: parsed.subject || '(No Subject)',
+                  body: parsed.text || parsed.html?.replace(/<[^>]+>/g, ' ') || '',
+                  html: parsed.html || '',
+                  read: Boolean(isSeen),
+                  starred: Boolean(msg.flags && msg.flags.has('\\Flagged')),
+                  deliveryStatus: 'Received via IMAP',
+                  timestamp: (parsed.date || msg.envelope?.date || new Date()).toISOString(),
+                });
+              } catch {
+                /* skip malformed message */
+              }
+            }
+          }
+        } finally {
+          lock.release();
+        }
+        await client.logout().catch(() => {});
+
+        messages.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+        sendJson(res, 200, {
+          ok: true,
+          synced: true,
+          imapHost,
+          count: messages.length,
+          messages,
+        });
+      } catch (imapErr) {
+        await client.close().catch(() => {});
+        sendJson(res, 200, {
+          ok: false,
+          synced: false,
+          imapHost,
+          error: `IMAP Sync failed on ${imapHost}:${imapPort} — ${imapErr?.message || 'Unable to connect'}`,
+        });
+      }
       return;
     }
 
@@ -385,7 +564,6 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (!stat || !stat.isFile()) {
-      // SPA fallback to index.html for client-side routes
       filePath = path.join(DIST_DIR, 'index.html');
       try {
         stat = fs.statSync(filePath);

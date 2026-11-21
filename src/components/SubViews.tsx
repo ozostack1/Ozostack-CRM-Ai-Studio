@@ -40,6 +40,7 @@ import { WebhooksView } from './webhooks/WebhooksView';
 import { TeamView } from './team/TeamView';
 import { PayrollView } from './payroll/PayrollView';
 import { TemplatesView } from './templates/TemplatesView';
+import { EmailCenterView } from './email/EmailCenterView';
 import { PersonalNotesTodosView } from './personal/PersonalNotesTodosView';
 
 interface SubViewsProps {
@@ -168,6 +169,10 @@ export const SubViews: React.FC<SubViewsProps> = ({ viewName }) => {
 
   if (viewName === 'Payroll' || viewName === 'Payroll Management') {
     return <PayrollView />;
+  }
+
+  if (viewName === 'Email' || viewName === 'Email & Inbox' || viewName === 'Mail Center') {
+    return <EmailCenterView />;
   }
 
   if (

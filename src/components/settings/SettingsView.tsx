@@ -228,6 +228,8 @@ export const SettingsView: React.FC = () => {
         localStorage.setItem('ozostack_pay_runs_v1', JSON.stringify(INITIAL_PAY_RUNS));
         localStorage.setItem('ozostack_reimbursements_v1', JSON.stringify(INITIAL_REIMBURSEMENT_CLAIMS));
         localStorage.setItem('ozostack_notifications_v4', JSON.stringify(INITIAL_NOTIFICATIONS));
+        localStorage.removeItem('ozostack_mailbox_messages_v1');
+        localStorage.setItem('ozostack_sent_emails_v1', JSON.stringify([]));
       } catch (err) {
         console.error('Reset mock data failed', err);
       }
@@ -264,6 +266,8 @@ export const SettingsView: React.FC = () => {
         localStorage.setItem('ozostack_pay_runs_v1', JSON.stringify([]));
         localStorage.setItem('ozostack_reimbursements_v1', JSON.stringify([]));
         localStorage.setItem('ozostack_notifications_v4', JSON.stringify([]));
+        localStorage.setItem('ozostack_mailbox_messages_v1', JSON.stringify([]));
+        localStorage.setItem('ozostack_sent_emails_v1', JSON.stringify([]));
       } catch (err) {
         console.error('Wipe CRM data failed', err);
       }

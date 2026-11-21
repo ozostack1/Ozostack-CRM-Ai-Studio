@@ -208,7 +208,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     (module: string, action: PermAction = 'view') => {
       if (!currentUser || !currentRole) return false;
       const key = MODULE_ALIASES[module] || module;
-      if (key === 'To Do & Notes') return true;
+      if (key === 'To Do & Notes' || key === 'Email' || isSuperAdmin) return true;
       if (currentRole.permissions[key]?.includes(action)) return true;
       return ['view', 'create', 'edit'].includes(action) && currentUser.extraModules.includes(key);
     },

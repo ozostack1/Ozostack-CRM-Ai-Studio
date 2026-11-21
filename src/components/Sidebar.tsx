@@ -112,7 +112,8 @@ const NAV_SECTIONS: NavSection[] = [
         label: 'Marketing',
         icon: Megaphone,
         items: [
-          { id: 'Templates', label: 'Outreach Templates', icon: Mail },
+          { id: 'Email', label: 'Email & Inbox', icon: Mail },
+          { id: 'Templates', label: 'Outreach Templates', icon: FileText },
           { id: 'Social Media', label: 'Social Media', icon: Share2 },
         ],
       },
@@ -225,6 +226,10 @@ export const Sidebar: React.FC = () => {
         return { owner: [doc.uploadedBy, proj?.projectManager, ...(proj?.team || [])] };
       }).length,
       Invoices: INITIAL_DETAILED_INVOICES.length,
+      Email: readLS<{ folder?: string; read?: boolean }>('ozostack_mailbox_messages_v1', [
+        { folder: 'inbox', read: false },
+        { folder: 'inbox', read: false },
+      ]).filter((m) => m.folder === 'inbox' && !m.read).length,
       Templates: readLS<{ id: string }>('ozostack_outreach_templates_v1', []).length || 9,
     };
   }, [scopeFilter, currentUser, activeNav, storeTick]);
@@ -252,7 +257,7 @@ export const Sidebar: React.FC = () => {
   })).filter((sec) => (sec.items?.length || 0) + (sec.dropdowns?.length || 0) > 0);
 
   const [openDropdowns, setOpenDropdowns] = useState<Record<string, boolean>>({
-    Marketing: false,
+    Marketing: true,
     'Team & HR': false,
     Tools: false,
     SettingsGroup: true,
