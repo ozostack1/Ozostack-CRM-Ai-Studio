@@ -19,34 +19,28 @@ import {
   KeyRound,
   LogOut,
   Bookmark,
-  Upload,
-  UserPlus,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import {
   useWhatsAppCenter,
   WaConversation,
-  WaContact,
   startWaQrSession,
   pollWaSessionStatus,
   disconnectWaSession,
   sendDirectWhatsApp,
   upsertWaMessage,
   saveWaConversations,
-  openOrCreateWaConversation,
-  importWaContactsBatch,
   normalizePhoneDigits,
   formatDisplayPhone,
 } from '../../data/whatsappService';
-import { INITIAL_LEADS, INITIAL_CONTACTS } from '../../data/mockData';
 import { DEFAULT_TEMPLATES, LeadMessageTemplate } from '../leads/LeadActionModal';
 
 export const WhatsAppCenterView: React.FC = () => {
   const { theme } = useTheme();
-  const { currentUser, scopeFilter } = useAuth();
+  const { currentUser } = useAuth();
   const isLight = theme === 'white-sky';
-  const { config, conversations, waContacts, updateConfig } = useWhatsAppCenter();
+  const { config, conversations, updateConfig } = useWhatsAppCenter();
 
   const isMetaConfigured = Boolean(
     config.mode === 'meta_api' &&
@@ -69,16 +63,16 @@ export const WhatsAppCenterView: React.FC = () => {
   const [metaWabaId, setMetaWabaId] = useState(config.metaWabaId);
   const [metaToken, setMetaToken] = useState(config.metaAccessToken);
 
-  // Chat Workspace State
+  // Chat Workspace State: 'chats' (1-on-1 only) | 'groups' (WhatsApp Groups only) | 'unread'
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterTab, setFilterTab] = useState<'all' | 'unread' | 'contacts'>('all');
+  const [filterTab, setFilterTab] = useState<'chats' | 'groups' | 'unread'>('chats');
   const [selectedChatId, setSelectedChatId] = useState<string | null>(
     conversations[0]?.id || null
   );
   const [messageText, setMessageText] = useState('');
   const [isSending, setIsSending] = useState(false);
 
-  // New Chat / Add Contact Modal State
+  // New Chat Modal State
   const [isNewChatOpen, setIsNewChatOpen] = useState(false);
   const [newChatPhone, setNewChatPhone] = useState('');
   const [newChatName, setNewChatName] = useState('');
@@ -93,7 +87,6 @@ export const WhatsAppCenterView: React.FC = () => {
   } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const vcfInputRef = useRef<HTMLInputElement>(null);
 
   const showBanner = (
     type: 'received' | 'sent' | 'info' | 'error',
@@ -106,7 +99,7 @@ export const WhatsAppCenterView: React.FC = () => {
     }, 6000);
   };
 
-  // Poll live WhatsApp session status, contacts, chats & history from backend
+  // Poll live WhatsApp session status, chats, groups & history from backend
   useEffect(() => {
     let active = true;
     let firstPoll = true;
@@ -124,7 +117,7 @@ export const WhatsAppCenterView: React.FC = () => {
         showBanner(
           'received',
           `Synced ${res.newMessagesCount} WhatsApp Message${res.newMessagesCount > 1 ? 's' : ''}`,
-          'Messages & contacts synced directly from your linked WhatsApp account!'
+          'Chats & group messages synced directly from your linked WhatsApp account!'
         );
       }
     };
@@ -136,71 +129,6 @@ export const WhatsAppCenterView: React.FC = () => {
       clearInterval(interval);
     };
   }, [currentUser?.id, isConnectOpen, config.qrConnected]);
-
-  // Unified Contacts Directory: Synced WhatsApp Contacts + CRM Contacts + CRM Leads + Conversation Participants
-  const allDirectoryContacts = useMemo(() => {
-    const map = new Map<string, WaContact>();
-    const put = (
-      name?: string,
-      phone?: string,
-      company?: string,
-      source: WaContact['source'] = 'whatsapp'
-    ) => {
-      const digits = normalizePhoneDigits(phone || '');
-      if (!digits || digits.length < 7) return;
-      const displayPhone = formatDisplayPhone(digits);
-      const existing = map.get(digits);
-      const rawName = (name || '').trim();
-      const hasRealName = rawName && !rawName.startsWith('+');
-      const finalName = hasRealName
-        ? rawName
-        : existing?.name && !existing.name.startsWith('+')
-        ? existing.name
-        : displayPhone;
-
-      map.set(digits, {
-        id: digits,
-        name: finalName,
-        phone: displayPhone,
-        company: company || existing?.company || (source === 'crm' ? 'CRM' : 'WhatsApp'),
-        source: existing?.source === 'whatsapp' ? 'whatsapp' : source,
-      });
-    };
-
-    // 1. Synced WhatsApp contacts from linked phone
-    waContacts.forEach((c) => put(c.name, c.phone || c.id, c.company, c.source || 'whatsapp'));
-
-    // 2. Existing conversation participants
-    conversations.forEach((conv) =>
-      put(conv.contactName, conv.contactPhone || conv.id, conv.company, 'whatsapp')
-    );
-
-    // 3. CRM Leads (scoped + fallback if unscoped)
-    try {
-      const rawLeads = localStorage.getItem('ozostack_leads_v2');
-      const parsedLeads = rawLeads ? JSON.parse(rawLeads) : INITIAL_LEADS;
-      const leads =
-        Array.isArray(parsedLeads) && parsedLeads.length > 0 ? parsedLeads : INITIAL_LEADS;
-      const scoped = scopeFilter(leads, (l: any) => ({ owner: l.owner }));
-      const targetLeads = scoped.length > 0 ? scoped : leads;
-      targetLeads.forEach((l: any) => put(l.name, l.whatsapp || l.phone, l.company, 'crm'));
-    } catch {}
-
-    // 4. CRM Contacts (scoped + fallback if unscoped)
-    try {
-      const rawContacts = localStorage.getItem('ozostack_contacts_v1');
-      const parsedContacts = rawContacts ? JSON.parse(rawContacts) : INITIAL_CONTACTS;
-      const contacts =
-        Array.isArray(parsedContacts) && parsedContacts.length > 0
-          ? parsedContacts
-          : INITIAL_CONTACTS;
-      const scoped = scopeFilter(contacts, (c: any) => ({ owner: c.owner }));
-      const targetContacts = scoped.length > 0 ? scoped : contacts;
-      targetContacts.forEach((c: any) => put(c.name, c.phone, c.company, 'crm'));
-    } catch {}
-
-    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [waContacts, conversations, scopeFilter]);
 
   // Saved templates
   const templates = useMemo<LeadMessageTemplate[]>(() => {
@@ -214,9 +142,26 @@ export const WhatsAppCenterView: React.FC = () => {
     return DEFAULT_TEMPLATES;
   }, []);
 
+  const directChatsCount = useMemo(
+    () => conversations.filter((c) => !c.isGroup).length,
+    [conversations]
+  );
+
+  const groupChatsCount = useMemo(
+    () => conversations.filter((c) => Boolean(c.isGroup)).length,
+    [conversations]
+  );
+
+  const totalUnread = useMemo(
+    () => conversations.reduce((sum, c) => sum + (c.unreadCount || 0), 0),
+    [conversations]
+  );
+
   const filteredConversations = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return conversations.filter((c) => {
+      if (filterTab === 'chats' && c.isGroup) return false;
+      if (filterTab === 'groups' && !c.isGroup) return false;
       if (filterTab === 'unread' && c.unreadCount === 0) return false;
       if (q) {
         return (
@@ -229,17 +174,6 @@ export const WhatsAppCenterView: React.FC = () => {
       return true;
     });
   }, [conversations, filterTab, searchQuery]);
-
-  const filteredContacts = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return allDirectoryContacts;
-    return allDirectoryContacts.filter(
-      (c) =>
-        c.name.toLowerCase().includes(q) ||
-        c.phone.toLowerCase().includes(q) ||
-        (c.company || '').toLowerCase().includes(q)
-    );
-  }, [allDirectoryContacts, searchQuery]);
 
   const selectedChat = useMemo(
     () =>
@@ -263,23 +197,6 @@ export const WhatsAppCenterView: React.FC = () => {
     }
   };
 
-  // Instant 1-Click Open Chat with any Contact (No Modal Required!)
-  const handleInstantChatWithContact = (contact: {
-    name: string;
-    phone: string;
-    company?: string;
-  }) => {
-    const conv = openOrCreateWaConversation({
-      contactPhone: contact.phone,
-      contactName: contact.name,
-      company: contact.company,
-    });
-    if (conv) {
-      setSelectedChatId(conv.id);
-      setFilterTab('all');
-    }
-  };
-
   // Manual Full Sync Trigger
   const handleManualSyncNow = async () => {
     setIsSyncingNow(true);
@@ -288,105 +205,19 @@ export const WhatsAppCenterView: React.FC = () => {
       if (res.ok && res.status === 'connected') {
         showBanner(
           'sent',
-          'WhatsApp Sync Complete!',
-          `Synced ${res.syncedContactsCount} contacts and ${res.newMessagesCount} new/history messages from your WhatsApp session.`
+          'WhatsApp Chats & Groups Synced!',
+          `Synced ${res.syncedChatsCount} chats/groups and ${res.newMessagesCount} new messages from your WhatsApp session.`
         );
       } else {
         setIsConnectOpen(true);
         showBanner(
           'info',
-          'Scan QR to Sync Full WhatsApp History & Contacts',
-          'Click "Generate Live QR" below and scan from your phone to sync all chats and contacts.'
+          'Scan QR to Sync WhatsApp Chats & Groups',
+          'Click "Generate Live QR" below and scan from your phone to sync all chats and groups.'
         );
       }
     } finally {
       setIsSyncingNow(false);
-    }
-  };
-
-  // Native Device Contact Picker OR VCF/CSV File Import
-  const handlePickDeviceContacts = async () => {
-    const nav = navigator as any;
-    if (nav?.contacts?.select) {
-      try {
-        const picked = await nav.contacts.select(['name', 'tel'], { multiple: true });
-        if (Array.isArray(picked) && picked.length > 0) {
-          const batch: { name?: string; phone: string; company?: string }[] = [];
-          for (const p of picked) {
-            const name = Array.isArray(p.name) ? p.name[0] : p.name;
-            const phones = Array.isArray(p.tel) ? p.tel : [p.tel];
-            for (const tel of phones) {
-              if (tel) batch.push({ name, phone: String(tel), company: 'Phone Contacts' });
-            }
-          }
-          const count = importWaContactsBatch(batch);
-          setFilterTab('contacts');
-          showBanner('sent', 'Phone Contacts Synced!', `Imported ${count} contacts from your device.`);
-          return;
-        }
-      } catch {
-        /* fallback to file picker */
-      }
-    }
-    vcfInputRef.current?.click();
-  };
-
-  const handleVcfOrCsvUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    try {
-      const text = await file.text();
-      const batch: { name?: string; phone: string; company?: string }[] = [];
-
-      if (text.includes('BEGIN:VCARD')) {
-        const cards = text.split(/BEGIN:VCARD/i);
-        for (const card of cards) {
-          const fnMatch = card.match(/^(?:FN|N)(?:;[^:]*)?:(.+)$/im);
-          const name = fnMatch
-            ? fnMatch[1].replace(/;/g, ' ').trim()
-            : '';
-          const telMatches = card.matchAll(/^TEL(?:;[^:]*)?:(.+)$/gim);
-          for (const tm of telMatches) {
-            if (tm[1]) {
-              batch.push({
-                name: name || undefined,
-                phone: tm[1].trim(),
-                company: 'Phone Contacts',
-              });
-            }
-          }
-        }
-      } else {
-        // CSV / line-by-line format: Name, Phone, Company
-        const lines = text.split(/\r?\n/);
-        for (const line of lines) {
-          const parts = line.split(/[,;\t]/).map((s) => s.replace(/^["']|["']$/g, '').trim());
-          const phonePart = parts.find((p) => p.replace(/[^0-9]/g, '').length >= 10);
-          if (phonePart) {
-            const namePart = parts.find((p) => p !== phonePart && /[a-zA-Z]/.test(p));
-            batch.push({
-              name: namePart || undefined,
-              phone: phonePart,
-              company: 'Imported Contact',
-            });
-          }
-        }
-      }
-
-      if (batch.length > 0) {
-        const count = importWaContactsBatch(batch);
-        setFilterTab('contacts');
-        showBanner(
-          'sent',
-          `Imported ${count} Contacts!`,
-          'All contacts are now available in your Contacts tab for 1-click WhatsApp chat.'
-        );
-      } else {
-        showBanner('error', 'No Valid Phone Numbers Found', 'Upload a .vcf (vCard) or .csv contacts file.');
-      }
-    } catch {
-      showBanner('error', 'Import Failed', 'Could not read the contacts file.');
     }
   };
 
@@ -458,7 +289,7 @@ export const WhatsAppCenterView: React.FC = () => {
       },
     ];
     const pick =
-      selectedChat
+      selectedChat && !selectedChat.isGroup
         ? {
             name: selectedChat.contactName,
             phone: selectedChat.contactPhone,
@@ -489,14 +320,14 @@ export const WhatsAppCenterView: React.FC = () => {
     );
   };
 
-  // Send message in active chat thread
+  // Send message in active chat or group thread
   const handleSendMessage = async (e?: React.FormEvent, forceWeb = false) => {
     e?.preventDefault();
     if (!selectedChat || !messageText.trim()) return;
     const textToSend = messageText.trim();
     setMessageText('');
 
-    if (forceWeb) {
+    if (forceWeb && !selectedChat.isGroup) {
       const digits = normalizePhoneDigits(selectedChat.contactPhone);
       window.open(
         `https://wa.me/${digits}?text=${encodeURIComponent(textToSend)}`,
@@ -520,51 +351,29 @@ export const WhatsAppCenterView: React.FC = () => {
     setIsSending(true);
     try {
       const res = await sendDirectWhatsApp({
-        toPhone: selectedChat.contactPhone,
+        toPhone: selectedChat.isGroup ? selectedChat.id : selectedChat.contactPhone,
         contactName: selectedChat.contactName,
         company: selectedChat.company,
+        isGroup: selectedChat.isGroup,
         text: textToSend,
-        allowWebFallback: true,
+        allowWebFallback: !selectedChat.isGroup,
       });
 
       if (res.realDelivered) {
         showBanner('sent', 'Delivered via Live WhatsApp', res.message);
       } else {
-        showBanner('info', 'Opened WhatsApp Web & Logged in Chat', res.message);
+        showBanner('info', 'WhatsApp Delivery Notice', res.message);
       }
     } finally {
       setIsSending(false);
     }
   };
 
-  // Start new WhatsApp chat or save new contact
+  // Start new 1-on-1 WhatsApp chat
   const handleStartNewChat = async (e: React.FormEvent) => {
     e.preventDefault();
     const digits = normalizePhoneDigits(newChatPhone);
-    if (!digits) return;
-
-    importWaContactsBatch([
-      {
-        name: newChatName.trim() || formatDisplayPhone(digits),
-        phone: digits,
-        company: newChatCompany.trim() || 'WhatsApp Contact',
-        source: 'imported',
-      },
-    ]);
-
-    if (!newChatText.trim()) {
-      const conv = openOrCreateWaConversation({
-        contactPhone: digits,
-        contactName: newChatName.trim() || formatDisplayPhone(digits),
-        company: newChatCompany.trim() || undefined,
-      });
-      if (conv) setSelectedChatId(conv.id);
-      setIsNewChatOpen(false);
-      setNewChatPhone('');
-      setNewChatName('');
-      setNewChatCompany('');
-      return;
-    }
+    if (!digits || !newChatText.trim()) return;
 
     setIsSending(true);
     try {
@@ -577,6 +386,7 @@ export const WhatsAppCenterView: React.FC = () => {
       });
 
       setSelectedChatId(digits);
+      setFilterTab('chats');
       setIsNewChatOpen(false);
       setNewChatPhone('');
       setNewChatName('');
@@ -623,19 +433,8 @@ export const WhatsAppCenterView: React.FC = () => {
       : 'bg-slate-900 border-slate-700 text-white focus:border-emerald-400'
   }`;
 
-  const totalUnread = conversations.reduce((sum, c) => sum + (c.unreadCount || 0), 0);
-
   return (
     <div className="space-y-4">
-      {/* Hidden file input for VCF / CSV Contact Import */}
-      <input
-        ref={vcfInputRef}
-        type="file"
-        accept=".vcf,.vcard,.csv,.txt"
-        onChange={handleVcfOrCsvUpload}
-        className="hidden"
-      />
-
       {/* =================================================================== */}
       {/* IN-PAGE LIVE SENT / RECEIVED NOTIFICATION BANNER                    */}
       {/* =================================================================== */}
@@ -706,7 +505,7 @@ export const WhatsAppCenterView: React.FC = () => {
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-1.5">
                 <Lock className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                 <span>
-                  <strong>100% Per-User Private WhatsApp:</strong> Only you ({currentUser?.name}) can see your linked WhatsApp number, contacts, and chats.
+                  <strong>100% Per-User Private WhatsApp:</strong> Only you ({currentUser?.name}) can see your linked WhatsApp number, direct chats, and groups.
                 </span>
               </p>
             </div>
@@ -722,24 +521,10 @@ export const WhatsAppCenterView: React.FC = () => {
                   ? 'border-sky-200 bg-sky-50/70 text-sky-700 hover:bg-sky-100'
                   : 'border-sky-500/30 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20'
               }`}
-              title="Force sync all WhatsApp chats, messages, and contacts from your linked session"
+              title="Force sync all WhatsApp chats and groups from your linked session"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isSyncingNow ? 'animate-spin' : ''}`} />
-              <span>{isSyncingNow ? 'Syncing...' : 'Sync Chats & Contacts'}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handlePickDeviceContacts}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
-                isLight
-                  ? 'border-indigo-200 bg-indigo-50/70 text-indigo-700 hover:bg-indigo-100'
-                  : 'border-indigo-500/30 bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20'
-              }`}
-              title="Import contacts from your Phone / Google Contacts (.vcf or .csv)"
-            >
-              <Upload className="w-3.5 h-3.5" />
-              <span>Import Phone Contacts</span>
+              <span>{isSyncingNow ? 'Syncing...' : 'Sync Chats & Groups'}</span>
             </button>
 
             <button
@@ -777,7 +562,7 @@ export const WhatsAppCenterView: React.FC = () => {
               className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-extrabold text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-md shadow-emerald-500/20 transition-all cursor-pointer"
             >
               <Plus className="w-4 h-4" />
-              <span>New Chat / Contact</span>
+              <span>New WhatsApp Chat</span>
             </button>
           </div>
         </div>
@@ -844,7 +629,7 @@ export const WhatsAppCenterView: React.FC = () => {
                           className="w-full px-3 py-1.5 rounded-xl bg-emerald-500 text-white hover:bg-emerald-600 text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
                         >
                           <RefreshCw className={`w-3 h-3 ${isSyncingNow ? 'animate-spin' : ''}`} />
-                          <span>Sync All Chats &amp; Contacts</span>
+                          <span>Sync All Chats &amp; Groups</span>
                         </button>
                         <button
                           type="button"
@@ -894,23 +679,20 @@ export const WhatsAppCenterView: React.FC = () => {
                 <div className="lg:col-span-8 space-y-3">
                   <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold">
                     <Smartphone className="w-3.5 h-3.5" />
-                    <span>Full Chat History + Contacts Sync Enabled</span>
+                    <span>Direct Chats + WhatsApp Groups Sync</span>
                   </div>
                   <h3 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white">
-                    How to Sync Your WhatsApp Chats, Messages &amp; Contacts:
+                    How to Sync Your WhatsApp Chats &amp; Groups:
                   </h3>
                   <ol className="text-xs text-slate-600 dark:text-slate-300 space-y-1.5 list-decimal list-inside">
                     <li>
-                      Click <strong>"Generate Live QR"</strong> (or <strong>"Re-Scan QR for Full History"</strong> if you linked earlier) to load a fresh pairing QR code.
+                      Click <strong>"Generate Live QR"</strong> on the left to load your real-time pairing QR code.
                     </li>
                     <li>
                       Open <strong>WhatsApp</strong> on your phone → <strong>Menu (⋮) / Settings → Linked Devices → Link a Device</strong> and scan the QR code.
                     </li>
                     <li>
-                      Keep WhatsApp open on your phone for 5–10 seconds after scanning — your phone will automatically push your <strong>recent WhatsApp chats, message history, and saved contacts</strong> directly into this window!
-                    </li>
-                    <li>
-                      You can also click the <strong>Contacts ({allDirectoryContacts.length})</strong> tab on the left or <strong>"Import Phone Contacts"</strong> to browse and start a chat with any contact in 1 click.
+                      Your 1-on-1 conversations appear in <strong>Chats ({directChatsCount})</strong> and your WhatsApp groups appear in <strong>Groups ({groupChatsCount})</strong>!
                     </li>
                   </ol>
                   {qrDataUrl && (
@@ -983,47 +765,48 @@ export const WhatsAppCenterView: React.FC = () => {
       </div>
 
       {/* =================================================================== */}
-      {/* 2-PANE WHATSAPP MESSENGER WORKSPACE: CHAT/CONTACT LIST | LIVE CHAT  */}
+      {/* 2-PANE WHATSAPP MESSENGER WORKSPACE: CHATS & GROUPS | LIVE THREAD   */}
       {/* =================================================================== */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 min-h-[620px]">
-        {/* LEFT PANE: CHATS & CONTACTS DIRECTORY (4 cols) */}
+        {/* LEFT PANE: CHATS, GROUPS & UNREAD TABS (4 cols) */}
         <div className={`lg:col-span-4 rounded-2xl border flex flex-col overflow-hidden ${cardBg}`}>
           <div className="p-3.5 border-b border-slate-100 dark:border-slate-800 space-y-2.5">
             <div className="flex items-center justify-between gap-1">
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1.5">
                 <button
                   type="button"
-                  onClick={() => setFilterTab('all')}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-colors cursor-pointer ${
-                    filterTab === 'all'
-                      ? 'bg-emerald-500 text-white'
+                  onClick={() => setFilterTab('chats')}
+                  className={`px-3 py-1 rounded-lg text-[11px] font-extrabold transition-colors cursor-pointer flex items-center gap-1 ${
+                    filterTab === 'chats'
+                      ? 'bg-emerald-500 text-white shadow-xs'
                       : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'
                   }`}
                 >
-                  Chats ({conversations.length})
+                  <MessageSquare className="w-3 h-3" />
+                  <span>Chats ({directChatsCount})</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => setFilterTab('unread')}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-colors cursor-pointer ${
-                    filterTab === 'unread'
-                      ? 'bg-emerald-500 text-white'
-                      : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'
-                  }`}
-                >
-                  Unread ({totalUnread})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFilterTab('contacts')}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-colors cursor-pointer flex items-center gap-1 ${
-                    filterTab === 'contacts'
-                      ? 'bg-emerald-500 text-white'
+                  onClick={() => setFilterTab('groups')}
+                  className={`px-3 py-1 rounded-lg text-[11px] font-extrabold transition-colors cursor-pointer flex items-center gap-1 ${
+                    filterTab === 'groups'
+                      ? 'bg-emerald-500 text-white shadow-xs'
                       : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'
                   }`}
                 >
                   <Users className="w-3 h-3" />
-                  <span>Contacts ({allDirectoryContacts.length})</span>
+                  <span>Groups ({groupChatsCount})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilterTab('unread')}
+                  className={`px-3 py-1 rounded-lg text-[11px] font-extrabold transition-colors cursor-pointer ${
+                    filterTab === 'unread'
+                      ? 'bg-emerald-500 text-white shadow-xs'
+                      : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'
+                  }`}
+                >
+                  Unread ({totalUnread})
                 </button>
               </div>
             </div>
@@ -1035,8 +818,8 @@ export const WhatsAppCenterView: React.FC = () => {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder={
-                  filterTab === 'contacts'
-                    ? 'Search synced WhatsApp & CRM contacts...'
+                  filterTab === 'groups'
+                    ? 'Search WhatsApp groups...'
                     : 'Search chats by name, phone, message...'
                 }
                 className={`${inputCls} pl-8 py-1.5`}
@@ -1044,75 +827,22 @@ export const WhatsAppCenterView: React.FC = () => {
             </div>
           </div>
 
-          {/* Active List: Either Chats OR Contacts Directory */}
-          <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/80 max-h-[410px]">
-            {filterTab === 'contacts' ? (
-              filteredContacts.length === 0 ? (
-                <div className="py-10 px-4 text-center space-y-2.5">
+          {/* Conversations List (Chats or Groups) */}
+          <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/80 max-h-[520px]">
+            {filteredConversations.length === 0 ? (
+              <div className="py-12 px-4 text-center space-y-2.5">
+                {filterTab === 'groups' ? (
                   <Users className="w-8 h-8 text-emerald-400 mx-auto opacity-50" />
-                  <p className="text-xs font-bold text-slate-500">No contacts found</p>
-                  <div className="flex flex-wrap justify-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handlePickDeviceContacts}
-                      className="px-3 py-1.5 rounded-xl bg-emerald-500 text-white text-xs font-bold cursor-pointer"
-                    >
-                      Import Phone Contacts (.vcf / .csv)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIsNewChatOpen(true)}
-                      className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold cursor-pointer"
-                    >
-                      + Add Contact
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                filteredContacts.map((contact) => (
-                  <div
-                    key={contact.id}
-                    onClick={() => handleInstantChatWithContact(contact)}
-                    className={`p-3 cursor-pointer transition-colors flex items-center justify-between gap-3 ${
-                      isLight ? 'hover:bg-emerald-50/70' : 'hover:bg-slate-800/50'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-emerald-500 to-teal-600 text-white font-extrabold text-xs flex items-center justify-center shrink-0 uppercase">
-                        {contact.name[0] || 'C'}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-xs font-extrabold text-slate-900 dark:text-white truncate">
-                          {contact.name}
-                        </div>
-                        <div className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 truncate">
-                          {contact.phone}
-                          {contact.company && (
-                            <span className="text-slate-400"> · {contact.company}</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-extrabold shrink-0">
-                      Chat →
-                    </span>
-                  </div>
-                ))
-              )
-            ) : filteredConversations.length === 0 ? (
-              <div className="py-10 px-4 text-center space-y-2.5">
-                <MessageSquare className="w-8 h-8 text-emerald-400 mx-auto opacity-50" />
-                <p className="text-xs font-bold text-slate-500">No WhatsApp chats yet</p>
+                ) : (
+                  <MessageSquare className="w-8 h-8 text-emerald-400 mx-auto opacity-50" />
+                )}
+                <p className="text-xs font-bold text-slate-500">
+                  {filterTab === 'groups'
+                    ? 'No WhatsApp groups synced yet'
+                    : 'No WhatsApp chats yet'}
+                </p>
                 <p className="text-[11px] text-slate-400">
-                  Click <strong>"Sync Chats &amp; Contacts"</strong> above or open the{' '}
-                  <button
-                    type="button"
-                    onClick={() => setFilterTab('contacts')}
-                    className="text-emerald-500 font-bold underline cursor-pointer"
-                  >
-                    Contacts ({allDirectoryContacts.length})
-                  </button>{' '}
-                  tab to start chatting in 1 click.
+                  Click <strong>"Sync Chats &amp; Groups"</strong> in the top bar to load your latest WhatsApp conversations.
                 </p>
               </div>
             ) : (
@@ -1132,8 +862,18 @@ export const WhatsAppCenterView: React.FC = () => {
                         : 'hover:bg-slate-800/40'
                     }`}
                   >
-                    <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-emerald-500 to-teal-600 text-white font-extrabold text-xs flex items-center justify-center shrink-0 uppercase">
-                      {conv.contactName[0] || 'W'}
+                    <div
+                      className={`w-9 h-9 rounded-full text-white font-extrabold text-xs flex items-center justify-center shrink-0 uppercase ${
+                        conv.isGroup
+                          ? 'bg-gradient-to-tr from-teal-600 to-sky-600'
+                          : 'bg-gradient-to-tr from-emerald-500 to-teal-600'
+                      }`}
+                    >
+                      {conv.isGroup ? (
+                        <Users className="w-4 h-4" />
+                      ) : (
+                        conv.contactName[0] || 'W'
+                      )}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
@@ -1147,9 +887,8 @@ export const WhatsAppCenterView: React.FC = () => {
                           })}
                         </span>
                       </div>
-                      <div className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400">
+                      <div className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 truncate">
                         {conv.contactPhone}
-                        {conv.company && <span className="text-slate-400"> · {conv.company}</span>}
                       </div>
                       <div className="flex items-center justify-between gap-2 mt-1">
                         <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
@@ -1167,35 +906,6 @@ export const WhatsAppCenterView: React.FC = () => {
               })
             )}
           </div>
-
-          {/* Quick-Start from Synced WhatsApp & CRM Contacts (1-Click Direct Open) */}
-          <div className="p-3 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
-                Quick Contacts ({allDirectoryContacts.length})
-              </div>
-              <button
-                type="button"
-                onClick={() => setFilterTab('contacts')}
-                className="text-[10px] font-bold text-emerald-500 hover:underline cursor-pointer"
-              >
-                View All →
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
-              {allDirectoryContacts.slice(0, 15).map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => handleInstantChatWithContact(c)}
-                  className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-emerald-500 text-[11px] font-semibold text-slate-700 dark:text-slate-200 truncate max-w-[180px] cursor-pointer"
-                  title={`${c.name} (${c.phone})`}
-                >
-                  {c.name}
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
 
         {/* RIGHT PANE: ACTIVE WHATSAPP CONVERSATION WINDOW (8 cols) */}
@@ -1206,45 +916,52 @@ export const WhatsAppCenterView: React.FC = () => {
                 <MessageSquare className="w-7 h-7" />
               </div>
               <h3 className="text-sm font-extrabold text-slate-700 dark:text-slate-200">
-                Select a WhatsApp conversation or pick any contact on the left
+                Select a WhatsApp Chat or Group on the left
               </h3>
               <p className="text-xs text-slate-400 max-w-sm">
-                Click any contact in the <strong>Contacts ({allDirectoryContacts.length})</strong> tab to open their chat window directly, or click <strong>"Sync Chats &amp; Contacts"</strong> to pull your latest WhatsApp messages.
+                Switch between <strong>Chats ({directChatsCount})</strong> and <strong>Groups ({groupChatsCount})</strong> on the left panel, or click <strong>"Sync Chats &amp; Groups"</strong> to pull your latest WhatsApp messages.
               </p>
-              <div className="flex flex-wrap items-center justify-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setFilterTab('contacts')}
-                  className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-extrabold shadow-md cursor-pointer"
-                >
-                  Browse All Contacts ({allDirectoryContacts.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsNewChatOpen(true)}
-                  className="px-4 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-extrabold cursor-pointer"
-                >
-                  + Dial New Number
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => setIsNewChatOpen(true)}
+                className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-extrabold shadow-md cursor-pointer"
+              >
+                + Start New WhatsApp Chat
+              </button>
             </div>
           ) : (
             <>
-              {/* Active Chat Header */}
+              {/* Active Chat / Group Header */}
               <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-emerald-500 to-teal-600 text-white font-extrabold text-sm flex items-center justify-center uppercase">
-                    {selectedChat.contactName[0] || 'W'}
+                  <div
+                    className={`w-10 h-10 rounded-full text-white font-extrabold text-sm flex items-center justify-center uppercase ${
+                      selectedChat.isGroup
+                        ? 'bg-gradient-to-tr from-teal-600 to-sky-600'
+                        : 'bg-gradient-to-tr from-emerald-500 to-teal-600'
+                    }`}
+                  >
+                    {selectedChat.isGroup ? (
+                      <Users className="w-5 h-5" />
+                    ) : (
+                      selectedChat.contactName[0] || 'W'
+                    )}
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
                       <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
                         {selectedChat.contactName}
                       </h3>
-                      {selectedChat.company && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/10 text-sky-500">
-                          {selectedChat.company}
+                      {selectedChat.isGroup ? (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-500/15 text-teal-500">
+                          Group
                         </span>
+                      ) : (
+                        selectedChat.company && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/10 text-sky-500">
+                            {selectedChat.company}
+                          </span>
+                        )
                       )}
                     </div>
                     <div className="text-xs font-mono text-emerald-600 dark:text-emerald-400">
@@ -1254,17 +971,19 @@ export const WhatsAppCenterView: React.FC = () => {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const digits = normalizePhoneDigits(selectedChat.contactPhone);
-                      window.open(`https://wa.me/${digits}`, '_blank', 'noopener,noreferrer');
-                    }}
-                    className="px-3 py-1.5 rounded-xl border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    <span>Open in WhatsApp</span>
-                  </button>
+                  {!selectedChat.isGroup && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const digits = normalizePhoneDigits(selectedChat.contactPhone);
+                        window.open(`https://wa.me/${digits}`, '_blank', 'noopener,noreferrer');
+                      }}
+                      className="px-3 py-1.5 rounded-xl border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Open in WhatsApp</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => handleDeleteChat(selectedChat.id)}
@@ -1278,17 +997,19 @@ export const WhatsAppCenterView: React.FC = () => {
 
               {/* Chat Messages Timeline */}
               <div
-                className={`flex-1 p-5 overflow-y-auto space-y-3 max-h-[400px] ${
+                className={`flex-1 p-5 overflow-y-auto space-y-3 max-h-[430px] ${
                   isLight ? 'bg-slate-50/70' : 'bg-[#090e1a]'
                 }`}
               >
                 {selectedChat.messages.length === 0 ? (
                   <div className="h-full py-16 text-center space-y-2">
                     <p className="text-xs font-bold text-slate-500">
-                      Start chatting with {selectedChat.contactName} ({selectedChat.contactPhone})
+                      {selectedChat.isGroup
+                        ? `Group: ${selectedChat.contactName}`
+                        : `Chat with ${selectedChat.contactName} (${selectedChat.contactPhone})`}
                     </p>
                     <p className="text-[11px] text-slate-400">
-                      Type a message below or click a template pill to send directly via your linked WhatsApp.
+                      Type a message below to send directly via your linked WhatsApp.
                     </p>
                   </div>
                 ) : (
@@ -1306,6 +1027,11 @@ export const WhatsAppCenterView: React.FC = () => {
                             : 'bg-slate-800 border border-slate-700 text-slate-100 rounded-bl-none'
                         }`}
                       >
+                        {selectedChat.isGroup && !m.fromMe && m.senderName && (
+                          <div className="text-[10px] font-extrabold text-emerald-500 mb-0.5">
+                            {m.senderName}
+                          </div>
+                        )}
                         <div className="whitespace-pre-wrap break-words">{m.text}</div>
                         <div
                           className={`flex items-center justify-end gap-1.5 mt-1 text-[10px] ${
@@ -1364,16 +1090,18 @@ export const WhatsAppCenterView: React.FC = () => {
                     className={`${inputCls} resize-none flex-1`}
                   />
 
-                  <button
-                    type="button"
-                    onClick={() => handleSendMessage(undefined, true)}
-                    disabled={!messageText.trim()}
-                    className="px-3 py-2.5 rounded-xl border border-emerald-500/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-40 text-xs font-bold flex items-center gap-1 shrink-0 cursor-pointer"
-                    title="Send via WhatsApp Web / App"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">WhatsApp Web</span>
-                  </button>
+                  {!selectedChat.isGroup && (
+                    <button
+                      type="button"
+                      onClick={() => handleSendMessage(undefined, true)}
+                      disabled={!messageText.trim()}
+                      className="px-3 py-2.5 rounded-xl border border-emerald-500/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-40 text-xs font-bold flex items-center gap-1 shrink-0 cursor-pointer"
+                      title="Send via WhatsApp Web / App"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">WhatsApp Web</span>
+                    </button>
+                  )}
 
                   <button
                     type="submit"
@@ -1391,7 +1119,7 @@ export const WhatsAppCenterView: React.FC = () => {
       </div>
 
       {/* =================================================================== */}
-      {/* NEW WHATSAPP CHAT / ADD CONTACT MODAL                               */}
+      {/* NEW WHATSAPP CHAT MODAL                                             */}
       {/* =================================================================== */}
       {isNewChatOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs">
@@ -1399,14 +1127,14 @@ export const WhatsAppCenterView: React.FC = () => {
             <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <div className="p-2 rounded-xl bg-emerald-500/15 text-emerald-500">
-                  <UserPlus className="w-4 h-4" />
+                  <MessageSquare className="w-4 h-4" />
                 </div>
                 <div>
                   <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
-                    New WhatsApp Chat / Add Contact
+                    Start New WhatsApp Chat
                   </h3>
                   <p className="text-[11px] text-slate-400">
-                    Pick from your contacts or enter any WhatsApp number
+                    Enter any WhatsApp number with country code
                   </p>
                 </div>
               </div>
@@ -1420,31 +1148,6 @@ export const WhatsAppCenterView: React.FC = () => {
             </div>
 
             <form onSubmit={handleStartNewChat} className="p-6 space-y-3.5 text-xs">
-              <div>
-                <label className="font-bold block mb-1">
-                  Quick Pick from Synced WhatsApp &amp; CRM Contacts ({allDirectoryContacts.length})
-                </label>
-                <select
-                  value=""
-                  onChange={(e) => {
-                    const found = allDirectoryContacts.find((c) => c.phone === e.target.value);
-                    if (found) {
-                      setNewChatName(found.name);
-                      setNewChatPhone(found.phone);
-                      setNewChatCompany(found.company || '');
-                    }
-                  }}
-                  className={inputCls}
-                >
-                  <option value="">Choose a contact...</option>
-                  {allDirectoryContacts.map((c) => (
-                    <option key={c.id} value={c.phone}>
-                      {c.name} — {c.phone} ({c.company || 'WhatsApp'})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="font-bold block mb-1">
@@ -1460,7 +1163,7 @@ export const WhatsAppCenterView: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="font-bold block mb-1">Contact Name</label>
+                  <label className="font-bold block mb-1">Name</label>
                   <input
                     type="text"
                     value={newChatName}
@@ -1473,13 +1176,14 @@ export const WhatsAppCenterView: React.FC = () => {
 
               <div>
                 <label className="font-bold block mb-1">
-                  First Message (Optional — leave blank to just open chat / save contact)
+                  Message <span className="text-rose-500">*</span>
                 </label>
                 <textarea
-                  rows={3}
+                  rows={4}
+                  required
                   value={newChatText}
                   onChange={(e) => setNewChatText(e.target.value)}
-                  placeholder="Write your WhatsApp message or leave blank to open chat..."
+                  placeholder="Write your WhatsApp message..."
                   className={`${inputCls} resize-none`}
                 />
               </div>
@@ -1498,13 +1202,7 @@ export const WhatsAppCenterView: React.FC = () => {
                   className="flex items-center gap-1.5 px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-extrabold shadow-md cursor-pointer"
                 >
                   <Send className="w-3.5 h-3.5" />
-                  <span>
-                    {isSending
-                      ? 'Sending...'
-                      : newChatText.trim()
-                      ? 'Send WhatsApp Message'
-                      : 'Save Contact & Open Chat'}
-                  </span>
+                  <span>{isSending ? 'Sending...' : 'Send WhatsApp Message'}</span>
                 </button>
               </div>
             </form>

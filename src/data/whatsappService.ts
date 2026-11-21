@@ -18,14 +18,6 @@ export interface WaUserConfig {
   updatedAt: string;
 }
 
-export interface WaContact {
-  id: string; // normalized digits e.g. '919876543210'
-  name: string;
-  phone: string;
-  company?: string;
-  source: 'whatsapp' | 'crm' | 'imported';
-}
-
 export interface WaChatMessage {
   id: string;
   chatId: string;
@@ -39,8 +31,9 @@ export interface WaChatMessage {
 }
 
 export interface WaConversation {
-  id: string; // normalized digits e.g. '919876543210'
+  id: string; // normalized digits e.g. '919876543210' OR group JID '120363...@g.us'
   ownerUserId: string;
+  isGroup?: boolean;
   contactName: string;
   contactPhone: string;
   company?: string;
@@ -61,19 +54,29 @@ export function getWaChatsKey(userId?: string): string {
   return `ozostack_wa_chats_user_v1_${id}`;
 }
 
-export function getWaContactsKey(userId?: string): string {
-  const id = userId || getActiveMailUser().id;
-  return `ozostack_wa_contacts_user_v1_${id}`;
+export function isGroupChatId(raw: string): boolean {
+  return String(raw || '').trim().endsWith('@g.us');
 }
 
 export function normalizePhoneDigits(raw: string): string {
-  const digits = String(raw || '').replace(/[^0-9]/g, '');
+  const s = String(raw || '').trim();
+  if (s.endsWith('@g.us')) return `${s.split('@')[0]}@g.us`;
+  const digits = s.replace(/[^0-9]/g, '');
   if (digits.length === 10) return `91${digits}`;
   return digits;
 }
 
-export function formatDisplayPhone(digits: string): string {
-  const clean = normalizePhoneDigits(digits);
+export function isValidChatIdentifier(id: string, isGroup?: boolean): boolean {
+  const s = String(id || '').trim();
+  if (isGroup || s.endsWith('@g.us')) return s.endsWith('@g.us');
+  const digits = s.replace(/[^0-9]/g, '');
+  // Valid international phone numbers are 10 to 13 digits; 14-15+ digits are raw WhatsApp @lid IDs
+  return digits.length >= 10 && digits.length <= 13;
+}
+
+export function formatDisplayPhone(digitsOrJid: string, isGroup?: boolean): string {
+  if (isGroup || isGroupChatId(digitsOrJid)) return 'WhatsApp Group';
+  const clean = normalizePhoneDigits(digitsOrJid);
   if (!clean) return '';
   if (clean.length === 12 && clean.startsWith('91')) {
     return `+91 ${clean.slice(2, 7)} ${clean.slice(7)}`;
@@ -99,6 +102,8 @@ export function getWaConfig(forUserId?: string): WaUserConfig {
 
   try {
     if (typeof window !== 'undefined' && window.localStorage) {
+      // Remove legacy contacts store so group member numbers never pollute storage
+      window.localStorage.removeItem(`ozostack_wa_contacts_user_v1_${targetUserId}`);
       const raw = window.localStorage.getItem(getWaConfigKey(targetUserId));
       if (raw) {
         const parsed = JSON.parse(raw);
@@ -135,86 +140,26 @@ export function saveWaConfig(partial: Partial<WaUserConfig>, forUserId?: string)
   return updated;
 }
 
-export function getWaContacts(forUserId?: string): WaContact[] {
-  const targetUserId = forUserId || getActiveMailUser().id;
-  try {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      const raw = window.localStorage.getItem(getWaContactsKey(targetUserId));
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    }
-  } catch {
-    /* ignore */
-  }
-  return [];
-}
-
-export function saveWaContacts(contacts: WaContact[], forUserId?: string): void {
-  const targetUserId = forUserId || getActiveMailUser().id;
-  try {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      window.localStorage.setItem(getWaContactsKey(targetUserId), JSON.stringify(contacts));
-      window.dispatchEvent(new CustomEvent('ozostack-wa-changed'));
-      window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
-    }
-  } catch {
-    /* ignore */
-  }
-}
-
-export function importWaContactsBatch(
-  items: { name?: string; phone: string; company?: string; source?: WaContact['source'] }[],
-  forUserId?: string
-): number {
-  const targetUserId = forUserId || getActiveMailUser().id;
-  const current = getWaContacts(targetUserId);
-  const map = new Map<string, WaContact>();
-  for (const c of current) {
-    if (c && c.id) map.set(c.id, c);
-  }
-
-  let addedOrUpdated = 0;
-  for (const item of items) {
-    const digits = normalizePhoneDigits(item.phone);
-    if (!digits || digits.length < 7) continue;
-    const displayPhone = formatDisplayPhone(digits);
-    const existing = map.get(digits);
-    const rawName = (item.name || '').trim();
-    const cleanName =
-      rawName && !rawName.startsWith('+')
-        ? rawName
-        : existing?.name && !existing.name.startsWith('+')
-        ? existing.name
-        : displayPhone;
-
-    map.set(digits, {
-      id: digits,
-      name: cleanName,
-      phone: displayPhone,
-      company: item.company || existing?.company || 'WhatsApp',
-      source: item.source || existing?.source || 'imported',
-    });
-    addedOrUpdated++;
-  }
-
-  const nextList = Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-  saveWaContacts(nextList, targetUserId);
-  return addedOrUpdated;
-}
-
 export function getWaConversations(forUserId?: string): WaConversation[] {
   const targetUserId = forUserId || getActiveMailUser().id;
   try {
     if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.removeItem(`ozostack_wa_contacts_user_v1_${targetUserId}`);
       const raw = window.localStorage.getItem(getWaChatsKey(targetUserId));
       if (raw !== null) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          return parsed.filter(
-            (c: WaConversation) => !c.ownerUserId || c.ownerUserId === targetUserId
-          );
+          return parsed
+            .filter(
+              (c: WaConversation) =>
+                c &&
+                (!c.ownerUserId || c.ownerUserId === targetUserId) &&
+                isValidChatIdentifier(c.id, c.isGroup)
+            )
+            .map((c: WaConversation) => ({
+              ...c,
+              isGroup: Boolean(c.isGroup || isGroupChatId(c.id)),
+            }));
         }
       }
     }
@@ -228,7 +173,13 @@ export function saveWaConversations(conversations: WaConversation[], forUserId?:
   const targetUserId = forUserId || getActiveMailUser().id;
   try {
     if (typeof window !== 'undefined' && window.localStorage) {
-      const tagged = conversations.map((c) => ({ ...c, ownerUserId: targetUserId }));
+      const tagged = conversations
+        .filter((c) => c && isValidChatIdentifier(c.id, c.isGroup))
+        .map((c) => ({
+          ...c,
+          ownerUserId: targetUserId,
+          isGroup: Boolean(c.isGroup || isGroupChatId(c.id)),
+        }));
       window.localStorage.setItem(getWaChatsKey(targetUserId), JSON.stringify(tagged));
       window.dispatchEvent(new CustomEvent('ozostack-wa-changed'));
       window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
@@ -238,59 +189,13 @@ export function saveWaConversations(conversations: WaConversation[], forUserId?:
   }
 }
 
-export function openOrCreateWaConversation(params: {
-  contactPhone: string;
-  contactName?: string;
-  company?: string;
-}): WaConversation | null {
-  const activeUser = getActiveMailUser();
-  const digits = normalizePhoneDigits(params.contactPhone);
-  if (!digits) return null;
-
-  const current = getWaConversations(activeUser.id);
-  const existingIdx = current.findIndex((c) => c.id === digits);
-  const displayPhone = formatDisplayPhone(digits);
-  const displayName = (params.contactName || '').trim() || displayPhone;
-
-  if (existingIdx >= 0) {
-    const existing = current[existingIdx];
-    const updatedConv: WaConversation = {
-      ...existing,
-      contactName:
-        existing.contactName && !existing.contactName.startsWith('+')
-          ? existing.contactName
-          : displayName,
-      company: params.company || existing.company,
-      unreadCount: 0,
-    };
-    const nextList = [updatedConv, ...current.filter((_, idx) => idx !== existingIdx)];
-    saveWaConversations(nextList, activeUser.id);
-    return updatedConv;
-  }
-
-  const nowIso = new Date().toISOString();
-  const newConv: WaConversation = {
-    id: digits,
-    ownerUserId: activeUser.id,
-    contactName: displayName,
-    contactPhone: displayPhone,
-    company: params.company || 'WhatsApp',
-    unreadCount: 0,
-    pinned: false,
-    lastMessageText: 'Tap below to send a WhatsApp message',
-    lastMessageAt: nowIso,
-    messages: [],
-  };
-
-  saveWaConversations([newConv, ...current], activeUser.id);
-  return newConv;
-}
-
 export function upsertWaMessage(
   params: {
     contactPhone: string;
     contactName?: string;
     company?: string;
+    isGroup?: boolean;
+    participantSender?: string;
     fromMe: boolean;
     text: string;
     messageId?: string;
@@ -300,11 +205,14 @@ export function upsertWaMessage(
   triggerNotification = true
 ): WaConversation | null {
   const activeUser = getActiveMailUser();
-  const digits = normalizePhoneDigits(params.contactPhone);
-  if (!digits) return null;
+  const isGroup = Boolean(params.isGroup || isGroupChatId(params.contactPhone));
+  const chatId = isGroup
+    ? `${String(params.contactPhone).split('@')[0]}@g.us`
+    : normalizePhoneDigits(params.contactPhone);
+  if (!chatId || !isValidChatIdentifier(chatId, isGroup)) return null;
 
   const current = getWaConversations(activeUser.id);
-  const existingIdx = current.findIndex((c) => c.id === digits);
+  const existingIdx = current.findIndex((c) => c.id === chatId);
   const nowIso = params.timestamp || new Date().toISOString();
   const msgId = params.messageId || `wa-msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
@@ -312,7 +220,7 @@ export function upsertWaMessage(
     return current[existingIdx];
   }
 
-  const displayPhone = formatDisplayPhone(digits);
+  const displayPhone = isGroup ? 'WhatsApp Group' : formatDisplayPhone(chatId);
   const displayName =
     params.contactName ||
     (existingIdx >= 0 ? current[existingIdx].contactName : '') ||
@@ -320,9 +228,11 @@ export function upsertWaMessage(
 
   const newMsg: WaChatMessage = {
     id: msgId,
-    chatId: digits,
+    chatId,
     fromMe: params.fromMe,
-    senderName: params.fromMe ? activeUser.name : displayName,
+    senderName: params.fromMe
+      ? activeUser.name
+      : params.participantSender || displayName,
     senderPhone: params.fromMe ? getWaConfig(activeUser.id).connectedPhone : displayPhone,
     text: params.text,
     timestamp: nowIso,
@@ -341,8 +251,11 @@ export function upsertWaMessage(
     const latestMsg = mergedMessages[mergedMessages.length - 1] || newMsg;
     targetConv = {
       ...existing,
+      isGroup,
       contactName:
-        existing.contactName && !existing.contactName.startsWith('+')
+        existing.contactName &&
+        !existing.contactName.startsWith('+') &&
+        existing.contactName !== 'WhatsApp Group'
           ? existing.contactName
           : displayName,
       company: params.company || existing.company,
@@ -354,8 +267,9 @@ export function upsertWaMessage(
     nextList = [targetConv, ...current.filter((_, idx) => idx !== existingIdx)];
   } else {
     targetConv = {
-      id: digits,
+      id: chatId,
       ownerUserId: activeUser.id,
+      isGroup,
       contactName: displayName,
       contactPhone: displayPhone,
       company: params.company,
@@ -389,173 +303,137 @@ export function upsertWaMessage(
 
 function mergeServerSyncData(data: {
   incomingMessages?: any[];
-  syncedContacts?: any[];
   syncedChats?: any[];
-}): { newMessagesCount: number; syncedContactsCount: number } {
+}): { newMessagesCount: number; syncedChatsCount: number } {
   const activeUser = getActiveMailUser();
   const userId = activeUser.id;
   const myPhoneDigits = normalizePhoneDigits(getWaConfig(userId).connectedPhone);
 
-  // 1. Merge Synced Contacts
-  const existingContacts = getWaContacts(userId);
-  const contactMap = new Map<string, WaContact>();
-  for (const c of existingContacts) {
-    if (c && c.id) contactMap.set(c.id, c);
-  }
-
-  let contactsChanged = false;
-  if (Array.isArray(data.syncedContacts)) {
-    for (const raw of data.syncedContacts) {
-      const digits = normalizePhoneDigits(raw?.phone || raw?.id || '');
-      if (!digits || digits.length < 7 || (myPhoneDigits && digits === myPhoneDigits)) continue;
-      const displayPhone = formatDisplayPhone(digits);
-      const candidateName = String(raw?.name || raw?.notify || '').trim();
-      const hasRealName = candidateName && !candidateName.startsWith('+');
-      const prev = contactMap.get(digits);
-      const finalName = hasRealName
-        ? candidateName
-        : prev?.name && !prev.name.startsWith('+')
-        ? prev.name
-        : displayPhone;
-
-      if (!prev || prev.name !== finalName) {
-        contactMap.set(digits, {
-          id: digits,
-          name: finalName,
-          phone: displayPhone,
-          company: prev?.company || 'WhatsApp Contact',
-          source: 'whatsapp',
-        });
-        contactsChanged = true;
-      }
-    }
-  }
-
-  // 2. Merge Synced Chats & Incoming/History Messages
   const currentConvs = getWaConversations(userId);
   const convMap = new Map<string, WaConversation>();
   for (const conv of currentConvs) {
-    if (conv && conv.id) {
-      const resolvedContact = contactMap.get(conv.id);
-      if (
-        resolvedContact &&
-        !resolvedContact.name.startsWith('+') &&
-        (!conv.contactName || conv.contactName.startsWith('+'))
-      ) {
-        conv.contactName = resolvedContact.name;
-      }
+    if (conv && conv.id && isValidChatIdentifier(conv.id, conv.isGroup)) {
       convMap.set(conv.id, conv);
     }
   }
 
   let convsChanged = false;
 
+  // 1. Sync actual Direct Chats & WhatsApp Groups from server
   if (Array.isArray(data.syncedChats)) {
     for (const ch of data.syncedChats) {
-      const digits = normalizePhoneDigits(ch?.phone || ch?.id || '');
-      if (!digits || digits.length < 7 || (myPhoneDigits && digits === myPhoneDigits)) continue;
-      const displayPhone = formatDisplayPhone(digits);
+      const isGroup = Boolean(ch?.isGroup || isGroupChatId(ch?.id || ch?.jid || ''));
+      const chatId = isGroup
+        ? `${String(ch?.id || ch?.jid).split('@')[0]}@g.us`
+        : normalizePhoneDigits(ch?.phone || ch?.id || '');
+      if (!chatId || !isValidChatIdentifier(chatId, isGroup)) continue;
+      if (!isGroup && myPhoneDigits && chatId === myPhoneDigits) continue;
+
+      const displayPhone = isGroup
+        ? ch?.phone || 'WhatsApp Group'
+        : formatDisplayPhone(chatId);
       const rawChatName = String(ch?.name || '').trim();
-      const contactInfo = contactMap.get(digits);
       const bestName =
         rawChatName && !rawChatName.startsWith('+')
           ? rawChatName
-          : contactInfo?.name && !contactInfo.name.startsWith('+')
-          ? contactInfo.name
+          : isGroup
+          ? 'WhatsApp Group'
           : displayPhone;
 
-      if (!contactMap.has(digits) || (bestName && !bestName.startsWith('+'))) {
-        contactMap.set(digits, {
-          id: digits,
-          name: bestName,
-          phone: displayPhone,
-          company: contactInfo?.company || 'WhatsApp Contact',
-          source: 'whatsapp',
-        });
-        contactsChanged = true;
-      }
-
-      const existing = convMap.get(digits);
+      const existing = convMap.get(chatId);
       if (!existing) {
-        convMap.set(digits, {
-          id: digits,
+        convMap.set(chatId, {
+          id: chatId,
           ownerUserId: userId,
+          isGroup,
           contactName: bestName,
           contactPhone: displayPhone,
-          company: 'WhatsApp',
+          company: isGroup ? 'Group' : undefined,
           unreadCount: Number(ch?.unreadCount) > 0 ? Number(ch.unreadCount) : 0,
           pinned: false,
-          lastMessageText: 'Synced from WhatsApp',
+          lastMessageText: isGroup ? 'WhatsApp Group synced' : 'WhatsApp Chat synced',
           lastMessageAt: ch?.lastTimestamp || new Date().toISOString(),
           messages: [],
         });
         convsChanged = true;
-      } else if (
-        bestName &&
-        !bestName.startsWith('+') &&
-        (!existing.contactName || existing.contactName.startsWith('+'))
-      ) {
-        existing.contactName = bestName;
-        convsChanged = true;
+      } else {
+        if (existing.isGroup !== isGroup) {
+          existing.isGroup = isGroup;
+          convsChanged = true;
+        }
+        if (
+          bestName &&
+          !bestName.startsWith('+') &&
+          bestName !== 'WhatsApp Group' &&
+          (!existing.contactName ||
+            existing.contactName.startsWith('+') ||
+            existing.contactName === 'WhatsApp Group')
+        ) {
+          existing.contactName = bestName;
+          convsChanged = true;
+        }
+        if (isGroup && ch?.phone && existing.contactPhone !== ch.phone) {
+          existing.contactPhone = ch.phone;
+          convsChanged = true;
+        }
       }
     }
   }
 
+  // 2. Sync Messages (Direct Chats & Group Messages)
   let addedMessages = 0;
   const liveNotificationsToFire: { name: string; phone: string; text: string; convId: string }[] = [];
 
   if (Array.isArray(data.incomingMessages) && data.incomingMessages.length > 0) {
     for (const m of data.incomingMessages) {
-      const digits = normalizePhoneDigits(m?.phone || m?.contactPhone || '');
+      const isGroup = Boolean(m?.isGroup || isGroupChatId(m?.chatId || m?.phone || ''));
+      const chatId = isGroup
+        ? `${String(m?.chatId || m?.phone).split('@')[0]}@g.us`
+        : normalizePhoneDigits(m?.chatId || m?.phone || m?.contactPhone || '');
       const text = String(m?.text || m?.body || '').trim();
-      if (!digits || !text || (myPhoneDigits && digits === myPhoneDigits)) continue;
+      if (!chatId || !text || !isValidChatIdentifier(chatId, isGroup)) continue;
+      if (!isGroup && myPhoneDigits && chatId === myPhoneDigits) continue;
 
-      const displayPhone = formatDisplayPhone(digits);
+      const displayPhone = isGroup
+        ? m?.contactPhone || 'WhatsApp Group'
+        : formatDisplayPhone(chatId);
       const fromMe = Boolean(m?.fromMe);
       const isHistory = Boolean(m?.isHistory);
-      const msgId = m?.id || `wa-live-${digits}-${m?.timestamp || Date.now()}`;
+      const msgId = m?.id || `wa-live-${chatId}-${m?.timestamp || Date.now()}`;
       const tsIso = m?.timestamp || new Date().toISOString();
 
-      const candidateName = String(m?.pushName || m?.contactName || '').trim();
-      const contactEntry = contactMap.get(digits);
+      const candidateName = String(m?.contactName || m?.pushName || '').trim();
       const bestName =
         candidateName && !candidateName.startsWith('+')
           ? candidateName
-          : contactEntry?.name && !contactEntry.name.startsWith('+')
-          ? contactEntry.name
+          : isGroup
+          ? 'WhatsApp Group'
           : displayPhone;
 
-      if (!contactMap.has(digits) || (bestName && !bestName.startsWith('+'))) {
-        contactMap.set(digits, {
-          id: digits,
-          name: bestName,
-          phone: displayPhone,
-          company: contactEntry?.company || 'WhatsApp Contact',
-          source: 'whatsapp',
-        });
-        contactsChanged = true;
-      }
-
-      let conv = convMap.get(digits);
+      let conv = convMap.get(chatId);
       if (!conv) {
         conv = {
-          id: digits,
+          id: chatId,
           ownerUserId: userId,
+          isGroup,
           contactName: bestName,
           contactPhone: displayPhone,
-          company: 'WhatsApp',
+          company: isGroup ? 'Group' : undefined,
           unreadCount: 0,
           pinned: false,
           lastMessageText: text,
           lastMessageAt: tsIso,
           messages: [],
         };
-        convMap.set(digits, conv);
+        convMap.set(chatId, conv);
         convsChanged = true;
       } else if (
         bestName &&
         !bestName.startsWith('+') &&
-        (!conv.contactName || conv.contactName.startsWith('+'))
+        bestName !== 'WhatsApp Group' &&
+        (!conv.contactName ||
+          conv.contactName.startsWith('+') ||
+          conv.contactName === 'WhatsApp Group')
       ) {
         conv.contactName = bestName;
         convsChanged = true;
@@ -565,11 +443,17 @@ function mergeServerSyncData(data: {
         continue;
       }
 
+      const senderLabel = fromMe
+        ? activeUser.name
+        : isGroup
+        ? m?.participantSender || 'Group Member'
+        : conv.contactName;
+
       const newMsg: WaChatMessage = {
         id: msgId,
-        chatId: digits,
+        chatId,
         fromMe,
-        senderName: fromMe ? activeUser.name : conv.contactName,
+        senderName: senderLabel,
         senderPhone: fromMe ? getWaConfig(userId).connectedPhone : displayPhone,
         text,
         timestamp: tsIso,
@@ -583,7 +467,7 @@ function mergeServerSyncData(data: {
         liveNotificationsToFire.push({
           name: conv.contactName,
           phone: conv.contactPhone,
-          text,
+          text: isGroup && m?.participantSender ? `${m.participantSender}: ${text}` : text,
           convId: conv.id,
         });
       }
@@ -593,13 +477,6 @@ function mergeServerSyncData(data: {
     }
   }
 
-  if (contactsChanged) {
-    const sortedContacts = Array.from(contactMap.values()).sort((a, b) =>
-      a.name.localeCompare(b.name)
-    );
-    saveWaContacts(sortedContacts, userId);
-  }
-
   if (convsChanged) {
     const allConvs = Array.from(convMap.values()).map((conv) => {
       if (conv.messages.length > 0) {
@@ -607,7 +484,10 @@ function mergeServerSyncData(data: {
           (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
         );
         const latest = conv.messages[conv.messages.length - 1];
-        conv.lastMessageText = latest.text;
+        conv.lastMessageText =
+          conv.isGroup && !latest.fromMe && latest.senderName
+            ? `${latest.senderName}: ${latest.text}`
+            : latest.text;
         conv.lastMessageAt = latest.timestamp;
       }
       return conv;
@@ -619,7 +499,6 @@ function mergeServerSyncData(data: {
     saveWaConversations(allConvs, userId);
   }
 
-  // Trigger Notification Bell only for new live incoming messages (max 3 alerts per poll batch)
   for (const alert of liveNotificationsToFire.slice(0, 3)) {
     addNotification({
       title: `New WhatsApp from ${alert.name}`,
@@ -636,7 +515,7 @@ function mergeServerSyncData(data: {
 
   return {
     newMessagesCount: addedMessages,
-    syncedContactsCount: contactMap.size,
+    syncedChatsCount: convMap.size,
   };
 }
 
@@ -682,7 +561,7 @@ export async function pollWaSessionStatus(fullSync = false): Promise<{
   phoneNumber?: string;
   pushName?: string;
   newMessagesCount: number;
-  syncedContactsCount: number;
+  syncedChatsCount: number;
 }> {
   const activeUser = getActiveMailUser();
   try {
@@ -692,7 +571,7 @@ export async function pollWaSessionStatus(fullSync = false): Promise<{
     );
     const data = await res.json().catch(() => null);
     if (!res.ok || !data) {
-      return { ok: false, status: 'disconnected', newMessagesCount: 0, syncedContactsCount: 0 };
+      return { ok: false, status: 'disconnected', newMessagesCount: 0, syncedChatsCount: 0 };
     }
 
     if (data.status === 'connected') {
@@ -711,9 +590,8 @@ export async function pollWaSessionStatus(fullSync = false): Promise<{
       }
     }
 
-    const { newMessagesCount, syncedContactsCount } = mergeServerSyncData({
+    const { newMessagesCount, syncedChatsCount } = mergeServerSyncData({
       incomingMessages: data.incomingMessages,
-      syncedContacts: data.syncedContacts,
       syncedChats: data.syncedChats,
     });
 
@@ -727,10 +605,10 @@ export async function pollWaSessionStatus(fullSync = false): Promise<{
       phoneNumber: data.phoneNumber,
       pushName: data.pushName,
       newMessagesCount,
-      syncedContactsCount,
+      syncedChatsCount,
     };
   } catch {
-    return { ok: false, status: 'disconnected', newMessagesCount: 0, syncedContactsCount: 0 };
+    return { ok: false, status: 'disconnected', newMessagesCount: 0, syncedChatsCount: 0 };
   }
 }
 
@@ -759,6 +637,7 @@ export async function sendDirectWhatsApp(params: {
   toPhone: string;
   contactName?: string;
   company?: string;
+  isGroup?: boolean;
   text: string;
   allowWebFallback?: boolean;
 }): Promise<{
@@ -769,16 +648,19 @@ export async function sendDirectWhatsApp(params: {
 }> {
   const activeUser = getActiveMailUser();
   const config = getWaConfig(activeUser.id);
-  const digits = normalizePhoneDigits(params.toPhone);
+  const isGroup = Boolean(params.isGroup || isGroupChatId(params.toPhone));
+  const targetId = isGroup
+    ? `${String(params.toPhone).split('@')[0]}@g.us`
+    : normalizePhoneDigits(params.toPhone);
   const text = (params.text || '').trim();
-  const allowFallback = params.allowWebFallback !== false;
+  const allowFallback = !isGroup && params.allowWebFallback !== false;
 
-  if (!digits || !text) {
+  if (!targetId || !text) {
     return {
       ok: false,
       realDelivered: false,
       via: 'Live WhatsApp',
-      message: 'Valid recipient phone number and message text are required.',
+      message: 'Valid recipient phone number / group and message text are required.',
     };
   }
 
@@ -788,10 +670,13 @@ export async function sendDirectWhatsApp(params: {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         userId: activeUser.id,
-        toPhone: digits,
+        toPhone: targetId,
         text,
         metaConfig:
-          config.mode === 'meta_api' && config.metaPhoneNumberId && config.metaAccessToken
+          !isGroup &&
+          config.mode === 'meta_api' &&
+          config.metaPhoneNumberId &&
+          config.metaAccessToken
             ? {
                 phoneNumberId: config.metaPhoneNumberId,
                 accessToken: config.metaAccessToken,
@@ -806,9 +691,10 @@ export async function sendDirectWhatsApp(params: {
         data.via === 'meta_cloud_api' ? 'Meta Cloud API' : 'Live WhatsApp';
       upsertWaMessage(
         {
-          contactPhone: digits,
+          contactPhone: targetId,
           contactName: params.contactName,
           company: params.company,
+          isGroup,
           fromMe: true,
           text,
           messageId: data.messageId,
@@ -820,7 +706,9 @@ export async function sendDirectWhatsApp(params: {
         ok: true,
         realDelivered: true,
         via: viaMode,
-        message: `WhatsApp message delivered directly to ${formatDisplayPhone(digits)} via ${viaMode}!`,
+        message: `WhatsApp message delivered directly to ${
+          params.contactName || formatDisplayPhone(targetId, isGroup)
+        } via ${viaMode}!`,
       };
     }
 
@@ -845,15 +733,16 @@ export async function sendDirectWhatsApp(params: {
     }
   }
 
-  // Fallback: Open WhatsApp Web / App with pre-filled message and log in CRM conversation
-  const waUrl = `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
+  // Fallback for 1-on-1 chats: Open WhatsApp Web / App with pre-filled message
+  const waUrl = `https://wa.me/${targetId}?text=${encodeURIComponent(text)}`;
   window.open(waUrl, '_blank', 'noopener,noreferrer');
 
   upsertWaMessage(
     {
-      contactPhone: digits,
+      contactPhone: targetId,
       contactName: params.contactName,
       company: params.company,
+      isGroup: false,
       fromMe: true,
       text,
       via: 'WhatsApp Web',
@@ -865,19 +754,17 @@ export async function sendDirectWhatsApp(params: {
     ok: true,
     realDelivered: false,
     via: 'WhatsApp Web',
-    message: `Opened WhatsApp Web for ${formatDisplayPhone(digits)}. Link your WhatsApp via QR Scan in WhatsApp Messenger for 1-click in-app sending without opening a new tab!`,
+    message: `Opened WhatsApp Web for ${formatDisplayPhone(targetId)}. Link your WhatsApp via QR Scan in WhatsApp Messenger for 1-click in-app sending!`,
   };
 }
 
 export function useWhatsAppCenter() {
   const [config, setConfig] = useState<WaUserConfig>(() => getWaConfig());
   const [conversations, setConversations] = useState<WaConversation[]>(() => getWaConversations());
-  const [waContacts, setWaContacts] = useState<WaContact[]>(() => getWaContacts());
 
   const refresh = useCallback(() => {
     setConfig(getWaConfig());
     setConversations(getWaConversations());
-    setWaContacts(getWaContacts());
   }, []);
 
   useEffect(() => {
@@ -898,5 +785,5 @@ export function useWhatsAppCenter() {
     return next;
   }, []);
 
-  return { config, conversations, waContacts, updateConfig, refresh };
+  return { config, conversations, updateConfig, refresh };
 }

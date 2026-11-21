@@ -250,24 +250,33 @@ async function loadWaSessionCacheFromDb(session) {
 
 function applySerializedWaStore(session, raw) {
   if (!raw || typeof raw !== 'object') return;
+  if (Array.isArray(raw.lidPairs)) {
+    for (const [k, v] of raw.lidPairs) {
+      if (k && v) session.lidToPhone.set(k, v);
+    }
+  }
   if (Array.isArray(raw.contacts)) {
     for (const c of raw.contacts) {
-      if (c && c.id) session.contactsMap.set(c.id, c);
+      if (c && c.id && isValidDirectPhoneDigits(c.id)) {
+        session.contactsMap.set(c.id, c);
+      }
     }
   }
   if (Array.isArray(raw.chats)) {
     for (const ch of raw.chats) {
-      if (ch && ch.id) session.chatsMap.set(ch.id, ch);
+      if (!ch || !ch.id) continue;
+      if (ch.isGroup || String(ch.id).endsWith('@g.us') || isValidDirectPhoneDigits(ch.id)) {
+        session.chatsMap.set(ch.id, ch);
+      }
     }
   }
   if (Array.isArray(raw.messages)) {
     for (const m of raw.messages) {
-      if (m && m.id) session.messagesMap.set(m.id, m);
-    }
-  }
-  if (Array.isArray(raw.lidPairs)) {
-    for (const [k, v] of raw.lidPairs) {
-      if (k && v) session.lidToPhone.set(k, v);
+      if (!m || !m.id) continue;
+      const chatKey = m.chatId || normalizeWaDigits(m.contactPhone || m.phone || '');
+      if (m.isGroup || String(chatKey).endsWith('@g.us') || isValidDirectPhoneDigits(chatKey)) {
+        session.messagesMap.set(m.id, m);
+      }
     }
   }
 }
@@ -314,9 +323,16 @@ function resolveWaWaiters(session) {
 }
 
 function normalizeWaDigits(raw) {
-  const d = String(raw || '').split(':')[0].split('@')[0].replace(/[^0-9]/g, '');
+  const s = String(raw || '').trim();
+  if (s.endsWith('@g.us')) return s;
+  const d = s.split(':')[0].split('@')[0].replace(/[^0-9]/g, '');
   if (d.length === 10) return `91${d}`;
   return d;
+}
+
+function isValidDirectPhoneDigits(digits) {
+  const d = String(digits || '').replace(/[^0-9]/g, '');
+  return d.length >= 10 && d.length <= 13;
 }
 
 function registerWaLidMapping(session, jidA, jidB) {
@@ -326,11 +342,15 @@ function registerWaLidMapping(session, jidA, jidB) {
   if (a.endsWith('@lid') && b.includes('@s.whatsapp.net')) {
     const lidKey = a.split(':')[0].split('@')[0];
     const phoneDigits = normalizeWaDigits(b);
-    if (lidKey && phoneDigits) session.lidToPhone.set(lidKey, phoneDigits);
+    if (lidKey && isValidDirectPhoneDigits(phoneDigits)) {
+      session.lidToPhone.set(lidKey, phoneDigits);
+    }
   } else if (b.endsWith('@lid') && a.includes('@s.whatsapp.net')) {
     const lidKey = b.split(':')[0].split('@')[0];
     const phoneDigits = normalizeWaDigits(a);
-    if (lidKey && phoneDigits) session.lidToPhone.set(lidKey, phoneDigits);
+    if (lidKey && isValidDirectPhoneDigits(phoneDigits)) {
+      session.lidToPhone.set(lidKey, phoneDigits);
+    }
   }
 }
 
@@ -343,29 +363,46 @@ function resolveWaJidToIdentity(session, rawJid, altJid) {
     !jid ||
     jid === 'status@broadcast' ||
     jid.endsWith('@broadcast') ||
-    jid.endsWith('@newsletter') ||
-    jid.endsWith('@g.us')
+    jid.endsWith('@newsletter')
   ) {
     return null;
+  }
+
+  // WhatsApp Group JID
+  if (jid.endsWith('@g.us')) {
+    const cleanGroupJid = `${jid.split('@')[0]}@g.us`;
+    return {
+      isGroup: true,
+      digits: cleanGroupJid,
+      phone: 'WhatsApp Group',
+      jid: cleanGroupJid,
+    };
   }
 
   const userPart = jid.split(':')[0].split('@')[0].replace(/[^0-9]/g, '');
   if (!userPart) return null;
 
+  // Linked Identity (@lid): ONLY accept if mapped to a real 10-13 digit phone number
   if (jid.endsWith('@lid')) {
     const mappedPhone =
       session.lidToPhone.get(userPart) ||
       (altJid && String(altJid).includes('@s.whatsapp.net') ? normalizeWaDigits(altJid) : '');
-    const finalDigits = mappedPhone || userPart;
+    if (!mappedPhone || !isValidDirectPhoneDigits(mappedPhone)) {
+      return null;
+    }
     return {
-      digits: finalDigits,
-      phone: `+${finalDigits}`,
-      jid: mappedPhone ? `${mappedPhone}@s.whatsapp.net` : jid,
+      isGroup: false,
+      digits: mappedPhone,
+      phone: `+${mappedPhone}`,
+      jid: `${mappedPhone}@s.whatsapp.net`,
     };
   }
 
   const digits = normalizeWaDigits(userPart);
+  if (!isValidDirectPhoneDigits(digits)) return null;
+
   return {
+    isGroup: false,
     digits,
     phone: `+${digits}`,
     jid: `${digits}@s.whatsapp.net`,
@@ -380,7 +417,7 @@ function upsertWaServerContact(session, rawContact) {
     rawContact.id || rawContact.jid || rawContact.phoneNumber,
     rawContact.lid || rawContact.phoneNumber
   );
-  if (!identity) return;
+  if (!identity || identity.isGroup) return;
 
   // Skip user's own number
   const myDigits = normalizeWaDigits(session.phoneNumber);
@@ -396,6 +433,8 @@ function upsertWaServerContact(session, rawContact) {
     '';
   const cleanName =
     candidateName && !String(candidateName).startsWith('+') ? String(candidateName).trim() : '';
+
+  if (!cleanName && !existing) return;
 
   session.contactsMap.set(identity.digits, {
     id: identity.digits,
@@ -415,21 +454,27 @@ function upsertWaServerChat(session, rawChat) {
   );
   if (!identity) return;
 
-  const myDigits = normalizeWaDigits(session.phoneNumber);
-  if (myDigits && identity.digits === myDigits) return;
+  if (!identity.isGroup) {
+    const myDigits = normalizeWaDigits(session.phoneNumber);
+    if (myDigits && identity.digits === myDigits) return;
+  }
 
-  const existingContact = session.contactsMap.get(identity.digits);
-  const chatName =
+  const existingChat = session.chatsMap.get(identity.digits);
+  const existingContact = !identity.isGroup ? session.contactsMap.get(identity.digits) : null;
+  const rawName =
+    rawChat.subject ||
     rawChat.name ||
     rawChat.displayName ||
-    rawChat.subject ||
+    (existingChat?.name && !existingChat.name.startsWith('+') && existingChat.name !== 'WhatsApp Group'
+      ? existingChat.name
+      : '') ||
     (existingContact?.name && !existingContact.name.startsWith('+') ? existingContact.name : '') ||
-    identity.phone;
+    (identity.isGroup ? 'WhatsApp Group' : identity.phone);
 
-  if (chatName && !String(chatName).startsWith('+')) {
+  if (!identity.isGroup && rawName && !String(rawName).startsWith('+')) {
     upsertWaServerContact(session, {
       id: identity.jid,
-      name: chatName,
+      name: rawName,
     });
   }
 
@@ -442,17 +487,23 @@ function upsertWaServerChat(session, rawChat) {
   const tsIso =
     tsNum > 0
       ? new Date(tsNum > 1e12 ? tsNum : tsNum * 1000).toISOString()
-      : new Date().toISOString();
+      : existingChat?.lastTimestamp || new Date().toISOString();
 
-  const existingChat = session.chatsMap.get(identity.digits);
+  const participantCount = Array.isArray(rawChat.participants)
+    ? rawChat.participants.length
+    : rawChat.size || existingChat?.participantCount || undefined;
+
   session.chatsMap.set(identity.digits, {
     id: identity.digits,
-    phone: identity.phone,
+    isGroup: Boolean(identity.isGroup),
+    phone: identity.isGroup
+      ? participantCount
+        ? `WhatsApp Group · ${participantCount} members`
+        : 'WhatsApp Group'
+      : identity.phone,
     jid: identity.jid,
-    name:
-      chatName && !String(chatName).startsWith('+')
-        ? String(chatName).trim()
-        : existingChat?.name || existingContact?.name || identity.phone,
+    name: String(rawName).trim() || (identity.isGroup ? 'WhatsApp Group' : identity.phone),
+    participantCount,
     unreadCount:
       typeof rawChat.unreadCount === 'number' && rawChat.unreadCount >= 0
         ? rawChat.unreadCount
@@ -544,8 +595,10 @@ function ingestWaMessage(session, msg, isHistory = false) {
     const identity = resolveWaJidToIdentity(session, remoteJid, altJid);
     if (!identity) return;
 
-    const myDigits = normalizeWaDigits(session.phoneNumber);
-    if (myDigits && identity.digits === myDigits) return;
+    if (!identity.isGroup) {
+      const myDigits = normalizeWaDigits(session.phoneNumber);
+      if (myDigits && identity.digits === myDigits) return;
+    }
 
     const text = extractWaMessageText(msg.message);
     if (!text) return;
@@ -559,7 +612,7 @@ function ingestWaMessage(session, msg, isHistory = false) {
       }
     }
 
-    if (!fromMe && msg.pushName) {
+    if (!identity.isGroup && !fromMe && msg.pushName) {
       upsertWaServerContact(session, {
         id: identity.jid,
         notify: msg.pushName,
@@ -567,14 +620,17 @@ function ingestWaMessage(session, msg, isHistory = false) {
       });
     }
 
-    const contactEntry = session.contactsMap.get(identity.digits);
+    const contactEntry = !identity.isGroup ? session.contactsMap.get(identity.digits) : null;
     const chatEntry = session.chatsMap.get(identity.digits);
-    const resolvedName =
-      (contactEntry?.name && !contactEntry.name.startsWith('+') ? contactEntry.name : '') ||
-      (chatEntry?.name && !chatEntry.name.startsWith('+') ? chatEntry.name : '') ||
-      (!fromMe && msg.pushName ? msg.pushName : '') ||
-      contactEntry?.notify ||
-      identity.phone;
+    const resolvedName = identity.isGroup
+      ? chatEntry?.name || 'WhatsApp Group'
+      : (contactEntry?.name && !contactEntry.name.startsWith('+') ? contactEntry.name : '') ||
+        (chatEntry?.name && !chatEntry.name.startsWith('+') ? chatEntry.name : '') ||
+        (!fromMe && msg.pushName ? msg.pushName : '') ||
+        contactEntry?.notify ||
+        identity.phone;
+
+    const participantSender = identity.isGroup && !fromMe ? msg.pushName || '' : '';
 
     const rawTs = Number(msg.messageTimestamp?.low || msg.messageTimestamp || 0);
     const ts =
@@ -585,10 +641,13 @@ function ingestWaMessage(session, msg, isHistory = false) {
     const msgId = `wa-live-${msg.key.id || `${identity.digits}-${rawTs || Date.now()}`}`;
     const payload = {
       id: msgId,
-      phone: identity.phone,
-      contactPhone: identity.phone,
+      chatId: identity.digits,
+      isGroup: Boolean(identity.isGroup),
+      phone: chatEntry?.phone || identity.phone,
+      contactPhone: chatEntry?.phone || identity.phone,
       pushName: resolvedName,
       contactName: resolvedName,
+      participantSender,
       fromMe,
       isHistory: Boolean(isHistory),
       direction: fromMe ? 'outbound' : 'inbound',
@@ -607,18 +666,13 @@ function ingestWaMessage(session, msg, isHistory = false) {
       session.messagesMap.delete(oldestKey);
     }
 
-    if (!session.contactsMap.has(identity.digits)) {
-      upsertWaServerContact(session, {
-        id: identity.jid,
-        name: resolvedName,
-      });
-    }
-
     session.chatsMap.set(identity.digits, {
       id: identity.digits,
-      phone: identity.phone,
+      isGroup: Boolean(identity.isGroup),
+      phone: chatEntry?.phone || identity.phone,
       jid: identity.jid,
       name: resolvedName,
+      participantCount: chatEntry?.participantCount,
       unreadCount: !fromMe && !isHistory ? (chatEntry?.unreadCount || 0) + 1 : chatEntry?.unreadCount || 0,
       lastTimestamp: ts,
     });
@@ -755,7 +809,7 @@ async function startBaileysSocket(session) {
       scheduleSaveWaSessionCache(session);
     });
 
-    // 3. Chats Sync
+    // 3. Chats & Groups Sync
     sock.ev.on('chats.upsert', (chats) => {
       if (!Array.isArray(chats)) return;
       for (const ch of chats) {
@@ -768,6 +822,22 @@ async function startBaileysSocket(session) {
       if (!Array.isArray(updates)) return;
       for (const ch of updates) {
         upsertWaServerChat(session, ch);
+      }
+      scheduleSaveWaSessionCache(session);
+    });
+
+    sock.ev.on('groups.upsert', (groups) => {
+      if (!Array.isArray(groups)) return;
+      for (const g of groups) {
+        upsertWaServerChat(session, g);
+      }
+      scheduleSaveWaSessionCache(session);
+    });
+
+    sock.ev.on('groups.update', (updates) => {
+      if (!Array.isArray(updates)) return;
+      for (const g of updates) {
+        upsertWaServerChat(session, g);
       }
       scheduleSaveWaSessionCache(session);
     });
@@ -827,14 +897,8 @@ async function startBaileysSocket(session) {
             const groups = await sock.groupFetchAllParticipating?.();
             if (groups && typeof groups === 'object') {
               for (const g of Object.values(groups)) {
-                const participants = Array.isArray(g?.participants) ? g.participants : [];
-                for (const p of participants) {
-                  upsertWaServerContact(session, {
-                    id: p.phoneNumber || p.jid || p.id,
-                    lid: p.lid || (String(p.id || '').endsWith('@lid') ? p.id : undefined),
-                    name: p.name || p.notify,
-                    notify: p.notify,
-                  });
+                if (g && g.id) {
+                  upsertWaServerChat(session, g);
                 }
               }
               scheduleSaveWaSessionCache(session);
@@ -1339,7 +1403,7 @@ const server = http.createServer(async (req, res) => {
         /* ignore */
       }
 
-      // If fullSync requested and socket is open, also trigger active app-state & group contact harvest
+      // If fullSync requested and socket is open, refresh app-state & participating WhatsApp groups
       if (fullSync && session.sock && session.status === 'connected') {
         try {
           await session.sock.resyncAppState?.(
@@ -1350,9 +1414,29 @@ const server = http.createServer(async (req, res) => {
           /* ignore */
         }
         try {
+          const groups = await session.sock.groupFetchAllParticipating?.();
+          if (groups && typeof groups === 'object') {
+            for (const g of Object.values(groups)) {
+              if (g && g.id) {
+                upsertWaServerChat(session, g);
+              }
+            }
+            scheduleSaveWaSessionCache(session);
+          }
+        } catch {
+          /* ignore */
+        }
+        try {
           session.sock.ev?.flush?.(true);
         } catch {
           /* ignore */
+        }
+      }
+
+      // Clean out any legacy unmapped 14+ digit @lid entries from chatsMap
+      for (const [k, ch] of session.chatsMap.entries()) {
+        if (!ch.isGroup && !String(k).endsWith('@g.us') && !isValidDirectPhoneDigits(k)) {
+          session.chatsMap.delete(k);
         }
       }
 
@@ -1364,7 +1448,6 @@ const server = http.createServer(async (req, res) => {
         incomingMessages = session.incomingMessages.splice(0, session.incomingMessages.length);
       }
 
-      const syncedContacts = Array.from(session.contactsMap.values());
       const syncedChats = Array.from(session.chatsMap.values());
 
       sendJson(res, 200, {
@@ -1374,9 +1457,8 @@ const server = http.createServer(async (req, res) => {
         phoneNumber: session.phoneNumber,
         pushName: session.pushName,
         incomingMessages,
-        syncedContacts,
         syncedChats,
-        totalContacts: syncedContacts.length,
+        totalChats: syncedChats.length,
         totalMessages: session.messagesMap.size,
       });
       return;
@@ -1386,11 +1468,13 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/whatsapp/send' && req.method === 'POST') {
       const body = await readJsonBody(req);
       const userId = body.userId;
-      const digits = normalizeWaDigits(body.toPhone || body.to || '');
+      const rawTarget = String(body.toPhone || body.to || '').trim();
+      const isGroupTarget = rawTarget.endsWith('@g.us');
+      const targetKey = isGroupTarget ? `${rawTarget.split('@')[0]}@g.us` : normalizeWaDigits(rawTarget);
       const text = String(body.text || '').trim();
 
-      if (!digits || !text) {
-        sendJson(res, 400, { ok: false, error: 'Recipient phone number and message text are required.' });
+      if (!targetKey || !text) {
+        sendJson(res, 400, { ok: false, error: 'Recipient phone number / group and message text are required.' });
         return;
       }
 
@@ -1399,17 +1483,21 @@ const server = http.createServer(async (req, res) => {
       // Priority A: Active Baileys QR session for this user
       if (session && session.status === 'connected' && session.sock) {
         try {
-          const knownContact = session.contactsMap.get(digits) || session.chatsMap.get(digits);
-          const jid = knownContact?.jid || `${digits}@s.whatsapp.net`;
+          const knownChat = session.chatsMap.get(targetKey) || session.contactsMap.get(targetKey);
+          const jid = isGroupTarget
+            ? targetKey
+            : knownChat?.jid || `${targetKey}@s.whatsapp.net`;
           const sent = await session.sock.sendMessage(jid, { text });
           const msgId = `wa-live-${sent?.key?.id || Date.now()}`;
           const nowIso = new Date().toISOString();
           session.messagesMap.set(msgId, {
             id: msgId,
-            phone: `+${digits}`,
-            contactPhone: `+${digits}`,
-            pushName: knownContact?.name || `+${digits}`,
-            contactName: knownContact?.name || `+${digits}`,
+            chatId: targetKey,
+            isGroup: isGroupTarget,
+            phone: isGroupTarget ? 'WhatsApp Group' : `+${targetKey}`,
+            contactPhone: isGroupTarget ? 'WhatsApp Group' : `+${targetKey}`,
+            pushName: knownChat?.name || (isGroupTarget ? 'WhatsApp Group' : `+${targetKey}`),
+            contactName: knownChat?.name || (isGroupTarget ? 'WhatsApp Group' : `+${targetKey}`),
             fromMe: true,
             isHistory: false,
             direction: 'outbound',
@@ -1438,6 +1526,8 @@ const server = http.createServer(async (req, res) => {
           return;
         }
       }
+
+      const digits = targetKey;
 
       // Priority B: Official Meta WhatsApp Cloud API (if configured by this user)
       const meta = body.metaConfig;
