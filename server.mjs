@@ -472,6 +472,13 @@ const server = http.createServer(async (req, res) => {
                   authUser;
                 const isSeen = msg.flags && msg.flags.has('\\Seen');
 
+                const rawText = parsed.text || parsed.html?.replace(/<[^>]+>/g, ' ') || '';
+                const cleanPreviewText = rawText
+                  .replace(/<https?:\/\/[^>]+>/g, '')
+                  .replace(/https?:\/\/\S{60,}/g, '[Link]')
+                  .replace(/\n{3,}/g, '\n\n')
+                  .trim();
+
                 messages.push({
                   id: `imap-${imapHost}-${msg.uid}`,
                   messageId: parsed.messageId || `uid-${msg.uid}`,
@@ -480,8 +487,8 @@ const server = http.createServer(async (req, res) => {
                   fromEmail: fromAddr,
                   toEmail: toAddr,
                   subject: parsed.subject || '(No Subject)',
-                  body: parsed.text || parsed.html?.replace(/<[^>]+>/g, ' ') || '',
-                  html: parsed.html || '',
+                  body: cleanPreviewText || rawText,
+                  html: parsed.html || parsed.textAsHtml || '',
                   read: Boolean(isSeen),
                   starred: Boolean(msg.flags && msg.flags.has('\\Flagged')),
                   deliveryStatus: 'Received via IMAP',

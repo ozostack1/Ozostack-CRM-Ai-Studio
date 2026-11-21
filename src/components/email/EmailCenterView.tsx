@@ -43,6 +43,143 @@ import {
 import { INITIAL_LEADS, INITIAL_CONTACTS } from '../../data/mockData';
 import { DEFAULT_TEMPLATES, LeadMessageTemplate } from '../leads/LeadActionModal';
 
+/**
+ * Cleans plain-text fallback strings that contain giant tracking URLs in angle brackets
+ * e.g. <https://www.vistaprint.in/...> so snippets and plain-text views look clean.
+ */
+function formatCleanPlainText(raw?: string): string {
+  if (!raw) return '';
+  return raw
+    .replace(/<(https?:\/\/[^>]+)>/g, (_, url: string) => {
+      try {
+        const u = new URL(url);
+        return `(${u.hostname})`;
+      } catch {
+        return '';
+      }
+    })
+    .replace(/https?:\/\/\S{70,}/g, (url: string) => {
+      try {
+        const u = new URL(url);
+        return `${u.origin}/...`;
+      } catch {
+        return url;
+      }
+    })
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * Renders an email's original HTML design (images, tables, buttons, styling) inside an isolated
+ * auto-sizing iframe, identical to how Gmail & modern webmail clients render original HTML emails.
+ */
+const OriginalEmailHtmlViewer: React.FC<{ html: string; plainText?: string }> = ({
+  html,
+  plainText,
+}) => {
+  const [iframeHeight, setIframeHeight] = useState<number>(480);
+  const [viewMode, setViewMode] = useState<'html' | 'text'>('html');
+
+  const preparedSrcDoc = useMemo(() => {
+    const baseStyle = `
+      <base target="_blank" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <style>
+        html, body {
+          margin: 0;
+          padding: 12px 16px;
+          background-color: #ffffff;
+          color: #0f172a;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+          font-size: 14px;
+          line-height: 1.6;
+          word-break: break-word;
+          overflow-x: auto;
+        }
+        img {
+          max-width: 100% !important;
+          height: auto !important;
+        }
+        table {
+          max-width: 100% !important;
+        }
+        a {
+          color: #0284c7;
+        }
+      </style>
+    `;
+    if (/<head[\s>]/i.test(html)) {
+      return html.replace(/<head([^>]*)>/i, `<head$1>${baseStyle}`);
+    }
+    return `<!DOCTYPE html><html><head>${baseStyle}</head><body>${html}</body></html>`;
+  }, [html]);
+
+  return (
+    <div className="flex flex-col">
+      <div className="px-5 py-1.5 bg-slate-50/80 dark:bg-slate-900/60 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between text-[11px]">
+        <span className="text-slate-400 font-medium">
+          Viewing in {viewMode === 'html' ? 'Original HTML Design' : 'Clean Text Format'}
+        </span>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setViewMode('html')}
+            className={`px-2 py-0.5 rounded font-bold cursor-pointer ${
+              viewMode === 'html'
+                ? 'bg-sky-500 text-white'
+                : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+            }`}
+          >
+            Original View
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode('text')}
+            className={`px-2 py-0.5 rounded font-bold cursor-pointer ${
+              viewMode === 'text'
+                ? 'bg-sky-500 text-white'
+                : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+            }`}
+          >
+            Plain Text
+          </button>
+        </div>
+      </div>
+
+      {viewMode === 'html' ? (
+        <div className="w-full bg-white overflow-y-auto max-h-[520px] border-b border-slate-100 dark:border-slate-800">
+          <iframe
+            title="Original Email Content"
+            srcDoc={preparedSrcDoc}
+            sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+            style={{ width: '100%', height: `${iframeHeight}px`, border: 'none', display: 'block' }}
+            onLoad={(e) => {
+              try {
+                const doc = e.currentTarget.contentDocument || e.currentTarget.contentWindow?.document;
+                if (doc && doc.documentElement) {
+                  const h = Math.max(
+                    doc.documentElement.scrollHeight || 0,
+                    doc.body?.scrollHeight || 0,
+                    360
+                  );
+                  setIframeHeight(Math.min(h + 24, 2400));
+                }
+              } catch {
+                /* cross-origin fallback */
+              }
+            }}
+          />
+        </div>
+      ) : (
+        <div className="p-5 text-xs sm:text-sm text-slate-700 dark:text-slate-200 whitespace-pre-wrap break-words leading-relaxed max-h-[460px] overflow-y-auto">
+          {formatCleanPlainText(plainText)}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const EmailCenterView: React.FC = () => {
   const { theme } = useTheme();
   const { currentUser, scopeFilter } = useAuth();
@@ -1043,7 +1180,7 @@ export const EmailCenterView: React.FC = () => {
 
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-[11px] text-slate-400 truncate flex-1">
-                        {msg.body.replace(/\s+/g, ' ').slice(0, 75)}
+                        {formatCleanPlainText(msg.body).replace(/\s+/g, ' ').slice(0, 75)}
                       </p>
                       <span
                         className={`text-[9px] px-1.5 py-0.5 rounded font-bold shrink-0 ${
@@ -1201,10 +1338,25 @@ export const EmailCenterView: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Email Body */}
-                <div className="p-5 text-xs sm:text-sm text-slate-700 dark:text-slate-200 whitespace-pre-wrap leading-relaxed max-h-[280px] overflow-y-auto">
-                  {selectedMessage.body}
-                </div>
+                {/* Email Body (Original HTML View or Clean Formatted Plain Text) */}
+                {selectedMessage.html && selectedMessage.html.trim().length > 0 ? (
+                  <OriginalEmailHtmlViewer
+                    key={selectedMessage.id}
+                    html={selectedMessage.html}
+                    plainText={selectedMessage.body}
+                  />
+                ) : /<[a-z][\s\S]*>/i.test(selectedMessage.body) &&
+                  (/<(html|body|table|div|p|img|a|span)\b/i.test(selectedMessage.body)) ? (
+                  <OriginalEmailHtmlViewer
+                    key={selectedMessage.id}
+                    html={selectedMessage.body}
+                    plainText={selectedMessage.body.replace(/<[^>]+>/g, ' ')}
+                  />
+                ) : (
+                  <div className="p-5 text-xs sm:text-sm text-slate-700 dark:text-slate-200 whitespace-pre-wrap break-words leading-relaxed max-h-[420px] overflow-y-auto">
+                    {formatCleanPlainText(selectedMessage.body)}
+                  </div>
+                )}
               </div>
 
               {/* Quick Reply Box */}

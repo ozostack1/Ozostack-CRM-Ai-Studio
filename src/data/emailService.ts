@@ -560,6 +560,11 @@ export async function syncInboxViaImap(customConfig?: SmtpConfig): Promise<{
     const existing = getMailboxMessages(activeUser.id);
     const existingIds = new Set(existing.map((m) => m.id));
     const existingMsgIds = new Set(existing.map((m) => m.messageId).filter(Boolean));
+    const incomingById = new Map<string, MailMessage>();
+    incoming.forEach((item) => {
+      incomingById.set(item.id, item);
+      if (item.messageId) incomingById.set(item.messageId, item);
+    });
 
     const fresh: MailMessage[] = [];
     for (const item of incoming) {
@@ -568,8 +573,22 @@ export async function syncInboxViaImap(customConfig?: SmtpConfig): Promise<{
       }
     }
 
+    // Also upgrade any existing synced messages so their original HTML and cleaned preview body are up to date
+    const upgradedExisting = existing.map((m) => {
+      const match = incomingById.get(m.id) || (m.messageId ? incomingById.get(m.messageId) : undefined);
+      if (match) {
+        return {
+          ...m,
+          html: match.html || m.html,
+          body: match.body || m.body,
+        };
+      }
+      return m;
+    });
+
+    saveMailboxMessages([...fresh, ...upgradedExisting], activeUser.id);
+
     if (fresh.length > 0) {
-      saveMailboxMessages([...fresh, ...existing], activeUser.id);
       fresh.slice(0, 3).forEach((m) => {
         addNotification({
           title: `New Email Received: ${m.subject}`,
