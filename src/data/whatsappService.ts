@@ -18,6 +18,14 @@ export interface WaUserConfig {
   updatedAt: string;
 }
 
+export interface WaContact {
+  id: string; // normalized digits e.g. '919876543210'
+  name: string;
+  phone: string;
+  company?: string;
+  source: 'whatsapp' | 'crm' | 'imported';
+}
+
 export interface WaChatMessage {
   id: string;
   chatId: string;
@@ -51,6 +59,11 @@ export function getWaConfigKey(userId?: string): string {
 export function getWaChatsKey(userId?: string): string {
   const id = userId || getActiveMailUser().id;
   return `ozostack_wa_chats_user_v1_${id}`;
+}
+
+export function getWaContactsKey(userId?: string): string {
+  const id = userId || getActiveMailUser().id;
+  return `ozostack_wa_contacts_user_v1_${id}`;
 }
 
 export function normalizePhoneDigits(raw: string): string {
@@ -122,6 +135,75 @@ export function saveWaConfig(partial: Partial<WaUserConfig>, forUserId?: string)
   return updated;
 }
 
+export function getWaContacts(forUserId?: string): WaContact[] {
+  const targetUserId = forUserId || getActiveMailUser().id;
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const raw = window.localStorage.getItem(getWaContactsKey(targetUserId));
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return [];
+}
+
+export function saveWaContacts(contacts: WaContact[], forUserId?: string): void {
+  const targetUserId = forUserId || getActiveMailUser().id;
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(getWaContactsKey(targetUserId), JSON.stringify(contacts));
+      window.dispatchEvent(new CustomEvent('ozostack-wa-changed'));
+      window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+export function importWaContactsBatch(
+  items: { name?: string; phone: string; company?: string; source?: WaContact['source'] }[],
+  forUserId?: string
+): number {
+  const targetUserId = forUserId || getActiveMailUser().id;
+  const current = getWaContacts(targetUserId);
+  const map = new Map<string, WaContact>();
+  for (const c of current) {
+    if (c && c.id) map.set(c.id, c);
+  }
+
+  let addedOrUpdated = 0;
+  for (const item of items) {
+    const digits = normalizePhoneDigits(item.phone);
+    if (!digits || digits.length < 7) continue;
+    const displayPhone = formatDisplayPhone(digits);
+    const existing = map.get(digits);
+    const rawName = (item.name || '').trim();
+    const cleanName =
+      rawName && !rawName.startsWith('+')
+        ? rawName
+        : existing?.name && !existing.name.startsWith('+')
+        ? existing.name
+        : displayPhone;
+
+    map.set(digits, {
+      id: digits,
+      name: cleanName,
+      phone: displayPhone,
+      company: item.company || existing?.company || 'WhatsApp',
+      source: item.source || existing?.source || 'imported',
+    });
+    addedOrUpdated++;
+  }
+
+  const nextList = Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  saveWaContacts(nextList, targetUserId);
+  return addedOrUpdated;
+}
+
 export function getWaConversations(forUserId?: string): WaConversation[] {
   const targetUserId = forUserId || getActiveMailUser().id;
   try {
@@ -156,6 +238,54 @@ export function saveWaConversations(conversations: WaConversation[], forUserId?:
   }
 }
 
+export function openOrCreateWaConversation(params: {
+  contactPhone: string;
+  contactName?: string;
+  company?: string;
+}): WaConversation | null {
+  const activeUser = getActiveMailUser();
+  const digits = normalizePhoneDigits(params.contactPhone);
+  if (!digits) return null;
+
+  const current = getWaConversations(activeUser.id);
+  const existingIdx = current.findIndex((c) => c.id === digits);
+  const displayPhone = formatDisplayPhone(digits);
+  const displayName = (params.contactName || '').trim() || displayPhone;
+
+  if (existingIdx >= 0) {
+    const existing = current[existingIdx];
+    const updatedConv: WaConversation = {
+      ...existing,
+      contactName:
+        existing.contactName && !existing.contactName.startsWith('+')
+          ? existing.contactName
+          : displayName,
+      company: params.company || existing.company,
+      unreadCount: 0,
+    };
+    const nextList = [updatedConv, ...current.filter((_, idx) => idx !== existingIdx)];
+    saveWaConversations(nextList, activeUser.id);
+    return updatedConv;
+  }
+
+  const nowIso = new Date().toISOString();
+  const newConv: WaConversation = {
+    id: digits,
+    ownerUserId: activeUser.id,
+    contactName: displayName,
+    contactPhone: displayPhone,
+    company: params.company || 'WhatsApp',
+    unreadCount: 0,
+    pinned: false,
+    lastMessageText: 'Tap below to send a WhatsApp message',
+    lastMessageAt: nowIso,
+    messages: [],
+  };
+
+  saveWaConversations([newConv, ...current], activeUser.id);
+  return newConv;
+}
+
 export function upsertWaMessage(
   params: {
     contactPhone: string;
@@ -178,7 +308,6 @@ export function upsertWaMessage(
   const nowIso = params.timestamp || new Date().toISOString();
   const msgId = params.messageId || `wa-msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
-  // Check if messageId already exists in conversation to avoid duplicates
   if (existingIdx >= 0 && current[existingIdx].messages.some((m) => m.id === msgId)) {
     return current[existingIdx];
   }
@@ -206,6 +335,10 @@ export function upsertWaMessage(
 
   if (existingIdx >= 0) {
     const existing = current[existingIdx];
+    const mergedMessages = [...existing.messages, newMsg].sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+    const latestMsg = mergedMessages[mergedMessages.length - 1] || newMsg;
     targetConv = {
       ...existing,
       contactName:
@@ -214,9 +347,9 @@ export function upsertWaMessage(
           : displayName,
       company: params.company || existing.company,
       unreadCount: params.fromMe ? existing.unreadCount : existing.unreadCount + 1,
-      lastMessageText: params.text,
-      lastMessageAt: nowIso,
-      messages: [...existing.messages, newMsg],
+      lastMessageText: latestMsg.text,
+      lastMessageAt: latestMsg.timestamp,
+      messages: mergedMessages,
     };
     nextList = [targetConv, ...current.filter((_, idx) => idx !== existingIdx)];
   } else {
@@ -254,7 +387,260 @@ export function upsertWaMessage(
   return targetConv;
 }
 
-export async function startWaQrSession(): Promise<{
+function mergeServerSyncData(data: {
+  incomingMessages?: any[];
+  syncedContacts?: any[];
+  syncedChats?: any[];
+}): { newMessagesCount: number; syncedContactsCount: number } {
+  const activeUser = getActiveMailUser();
+  const userId = activeUser.id;
+  const myPhoneDigits = normalizePhoneDigits(getWaConfig(userId).connectedPhone);
+
+  // 1. Merge Synced Contacts
+  const existingContacts = getWaContacts(userId);
+  const contactMap = new Map<string, WaContact>();
+  for (const c of existingContacts) {
+    if (c && c.id) contactMap.set(c.id, c);
+  }
+
+  let contactsChanged = false;
+  if (Array.isArray(data.syncedContacts)) {
+    for (const raw of data.syncedContacts) {
+      const digits = normalizePhoneDigits(raw?.phone || raw?.id || '');
+      if (!digits || digits.length < 7 || (myPhoneDigits && digits === myPhoneDigits)) continue;
+      const displayPhone = formatDisplayPhone(digits);
+      const candidateName = String(raw?.name || raw?.notify || '').trim();
+      const hasRealName = candidateName && !candidateName.startsWith('+');
+      const prev = contactMap.get(digits);
+      const finalName = hasRealName
+        ? candidateName
+        : prev?.name && !prev.name.startsWith('+')
+        ? prev.name
+        : displayPhone;
+
+      if (!prev || prev.name !== finalName) {
+        contactMap.set(digits, {
+          id: digits,
+          name: finalName,
+          phone: displayPhone,
+          company: prev?.company || 'WhatsApp Contact',
+          source: 'whatsapp',
+        });
+        contactsChanged = true;
+      }
+    }
+  }
+
+  // 2. Merge Synced Chats & Incoming/History Messages
+  const currentConvs = getWaConversations(userId);
+  const convMap = new Map<string, WaConversation>();
+  for (const conv of currentConvs) {
+    if (conv && conv.id) {
+      const resolvedContact = contactMap.get(conv.id);
+      if (
+        resolvedContact &&
+        !resolvedContact.name.startsWith('+') &&
+        (!conv.contactName || conv.contactName.startsWith('+'))
+      ) {
+        conv.contactName = resolvedContact.name;
+      }
+      convMap.set(conv.id, conv);
+    }
+  }
+
+  let convsChanged = false;
+
+  if (Array.isArray(data.syncedChats)) {
+    for (const ch of data.syncedChats) {
+      const digits = normalizePhoneDigits(ch?.phone || ch?.id || '');
+      if (!digits || digits.length < 7 || (myPhoneDigits && digits === myPhoneDigits)) continue;
+      const displayPhone = formatDisplayPhone(digits);
+      const rawChatName = String(ch?.name || '').trim();
+      const contactInfo = contactMap.get(digits);
+      const bestName =
+        rawChatName && !rawChatName.startsWith('+')
+          ? rawChatName
+          : contactInfo?.name && !contactInfo.name.startsWith('+')
+          ? contactInfo.name
+          : displayPhone;
+
+      if (!contactMap.has(digits) || (bestName && !bestName.startsWith('+'))) {
+        contactMap.set(digits, {
+          id: digits,
+          name: bestName,
+          phone: displayPhone,
+          company: contactInfo?.company || 'WhatsApp Contact',
+          source: 'whatsapp',
+        });
+        contactsChanged = true;
+      }
+
+      const existing = convMap.get(digits);
+      if (!existing) {
+        convMap.set(digits, {
+          id: digits,
+          ownerUserId: userId,
+          contactName: bestName,
+          contactPhone: displayPhone,
+          company: 'WhatsApp',
+          unreadCount: Number(ch?.unreadCount) > 0 ? Number(ch.unreadCount) : 0,
+          pinned: false,
+          lastMessageText: 'Synced from WhatsApp',
+          lastMessageAt: ch?.lastTimestamp || new Date().toISOString(),
+          messages: [],
+        });
+        convsChanged = true;
+      } else if (
+        bestName &&
+        !bestName.startsWith('+') &&
+        (!existing.contactName || existing.contactName.startsWith('+'))
+      ) {
+        existing.contactName = bestName;
+        convsChanged = true;
+      }
+    }
+  }
+
+  let addedMessages = 0;
+  const liveNotificationsToFire: { name: string; phone: string; text: string; convId: string }[] = [];
+
+  if (Array.isArray(data.incomingMessages) && data.incomingMessages.length > 0) {
+    for (const m of data.incomingMessages) {
+      const digits = normalizePhoneDigits(m?.phone || m?.contactPhone || '');
+      const text = String(m?.text || m?.body || '').trim();
+      if (!digits || !text || (myPhoneDigits && digits === myPhoneDigits)) continue;
+
+      const displayPhone = formatDisplayPhone(digits);
+      const fromMe = Boolean(m?.fromMe);
+      const isHistory = Boolean(m?.isHistory);
+      const msgId = m?.id || `wa-live-${digits}-${m?.timestamp || Date.now()}`;
+      const tsIso = m?.timestamp || new Date().toISOString();
+
+      const candidateName = String(m?.pushName || m?.contactName || '').trim();
+      const contactEntry = contactMap.get(digits);
+      const bestName =
+        candidateName && !candidateName.startsWith('+')
+          ? candidateName
+          : contactEntry?.name && !contactEntry.name.startsWith('+')
+          ? contactEntry.name
+          : displayPhone;
+
+      if (!contactMap.has(digits) || (bestName && !bestName.startsWith('+'))) {
+        contactMap.set(digits, {
+          id: digits,
+          name: bestName,
+          phone: displayPhone,
+          company: contactEntry?.company || 'WhatsApp Contact',
+          source: 'whatsapp',
+        });
+        contactsChanged = true;
+      }
+
+      let conv = convMap.get(digits);
+      if (!conv) {
+        conv = {
+          id: digits,
+          ownerUserId: userId,
+          contactName: bestName,
+          contactPhone: displayPhone,
+          company: 'WhatsApp',
+          unreadCount: 0,
+          pinned: false,
+          lastMessageText: text,
+          lastMessageAt: tsIso,
+          messages: [],
+        };
+        convMap.set(digits, conv);
+        convsChanged = true;
+      } else if (
+        bestName &&
+        !bestName.startsWith('+') &&
+        (!conv.contactName || conv.contactName.startsWith('+'))
+      ) {
+        conv.contactName = bestName;
+        convsChanged = true;
+      }
+
+      if (conv.messages.some((existingMsg) => existingMsg.id === msgId)) {
+        continue;
+      }
+
+      const newMsg: WaChatMessage = {
+        id: msgId,
+        chatId: digits,
+        fromMe,
+        senderName: fromMe ? activeUser.name : conv.contactName,
+        senderPhone: fromMe ? getWaConfig(userId).connectedPhone : displayPhone,
+        text,
+        timestamp: tsIso,
+        status: fromMe ? 'delivered' : 'received',
+        via: m?.via === 'meta_cloud_api' ? 'Meta Cloud API' : 'Live WhatsApp',
+      };
+
+      conv.messages.push(newMsg);
+      if (!fromMe && !isHistory) {
+        conv.unreadCount = (conv.unreadCount || 0) + 1;
+        liveNotificationsToFire.push({
+          name: conv.contactName,
+          phone: conv.contactPhone,
+          text,
+          convId: conv.id,
+        });
+      }
+
+      addedMessages++;
+      convsChanged = true;
+    }
+  }
+
+  if (contactsChanged) {
+    const sortedContacts = Array.from(contactMap.values()).sort((a, b) =>
+      a.name.localeCompare(b.name)
+    );
+    saveWaContacts(sortedContacts, userId);
+  }
+
+  if (convsChanged) {
+    const allConvs = Array.from(convMap.values()).map((conv) => {
+      if (conv.messages.length > 0) {
+        conv.messages.sort(
+          (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        );
+        const latest = conv.messages[conv.messages.length - 1];
+        conv.lastMessageText = latest.text;
+        conv.lastMessageAt = latest.timestamp;
+      }
+      return conv;
+    });
+
+    allConvs.sort(
+      (a, b) => new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime()
+    );
+    saveWaConversations(allConvs, userId);
+  }
+
+  // Trigger Notification Bell only for new live incoming messages (max 3 alerts per poll batch)
+  for (const alert of liveNotificationsToFire.slice(0, 3)) {
+    addNotification({
+      title: `New WhatsApp from ${alert.name}`,
+      subtitle: `${alert.text.slice(0, 90)} · ${alert.phone}`,
+      type: 'lead',
+      read: false,
+      targetNav: 'WhatsApp',
+      targetId: alert.convId,
+      owner: activeUser.name,
+      recipient: activeUser.name,
+      priority: 'high',
+    });
+  }
+
+  return {
+    newMessagesCount: addedMessages,
+    syncedContactsCount: contactMap.size,
+  };
+}
+
+export async function startWaQrSession(forceReset = false): Promise<{
   ok: boolean;
   status: string;
   qrDataUrl?: string;
@@ -267,7 +653,7 @@ export async function startWaQrSession(): Promise<{
     const res = await fetch('/api/whatsapp/connect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: activeUser.id }),
+      body: JSON.stringify({ userId: activeUser.id, forceReset }),
     });
     const data = await res.json().catch(() => null);
     if (res.ok && data) {
@@ -289,23 +675,24 @@ export async function startWaQrSession(): Promise<{
   }
 }
 
-export async function pollWaSessionStatus(): Promise<{
+export async function pollWaSessionStatus(fullSync = false): Promise<{
   ok: boolean;
   status: 'disconnected' | 'connecting' | 'qr_ready' | 'connected';
   qrDataUrl?: string;
   phoneNumber?: string;
   pushName?: string;
   newMessagesCount: number;
+  syncedContactsCount: number;
 }> {
   const activeUser = getActiveMailUser();
   try {
     const res = await fetch(
-      `/api/whatsapp/status?userId=${encodeURIComponent(activeUser.id)}`,
+      `/api/whatsapp/status?userId=${encodeURIComponent(activeUser.id)}${fullSync ? '&full=1' : ''}`,
       { cache: 'no-store' }
     );
     const data = await res.json().catch(() => null);
     if (!res.ok || !data) {
-      return { ok: false, status: 'disconnected', newMessagesCount: 0 };
+      return { ok: false, status: 'disconnected', newMessagesCount: 0, syncedContactsCount: 0 };
     }
 
     if (data.status === 'connected') {
@@ -324,35 +711,26 @@ export async function pollWaSessionStatus(): Promise<{
       }
     }
 
-    let added = 0;
-    if (Array.isArray(data.incomingMessages) && data.incomingMessages.length > 0) {
-      for (const m of data.incomingMessages) {
-        upsertWaMessage(
-          {
-            contactPhone: m.phone,
-            contactName: m.pushName || m.phone,
-            fromMe: Boolean(m.fromMe),
-            text: m.text,
-            messageId: m.id,
-            timestamp: m.timestamp,
-            via: 'Live WhatsApp',
-          },
-          !m.fromMe
-        );
-        added++;
-      }
-    }
+    const { newMessagesCount, syncedContactsCount } = mergeServerSyncData({
+      incomingMessages: data.incomingMessages,
+      syncedContacts: data.syncedContacts,
+      syncedChats: data.syncedChats,
+    });
+
+    const mappedStatus =
+      data.status === 'qr_pending' && data.qrDataUrl ? 'qr_ready' : data.status || 'disconnected';
 
     return {
       ok: true,
-      status: data.status || 'disconnected',
+      status: mappedStatus,
       qrDataUrl: data.qrDataUrl,
       phoneNumber: data.phoneNumber,
       pushName: data.pushName,
-      newMessagesCount: added,
+      newMessagesCount,
+      syncedContactsCount,
     };
   } catch {
-    return { ok: false, status: 'disconnected', newMessagesCount: 0 };
+    return { ok: false, status: 'disconnected', newMessagesCount: 0, syncedContactsCount: 0 };
   }
 }
 
@@ -425,7 +803,7 @@ export async function sendDirectWhatsApp(params: {
 
     if (res.ok && data && data.ok && data.realDelivered) {
       const viaMode: WaChatMessage['via'] =
-        data.via === 'meta_api' ? 'Meta Cloud API' : 'Live WhatsApp';
+        data.via === 'meta_cloud_api' ? 'Meta Cloud API' : 'Live WhatsApp';
       upsertWaMessage(
         {
           contactPhone: digits,
@@ -494,10 +872,12 @@ export async function sendDirectWhatsApp(params: {
 export function useWhatsAppCenter() {
   const [config, setConfig] = useState<WaUserConfig>(() => getWaConfig());
   const [conversations, setConversations] = useState<WaConversation[]>(() => getWaConversations());
+  const [waContacts, setWaContacts] = useState<WaContact[]>(() => getWaContacts());
 
   const refresh = useCallback(() => {
     setConfig(getWaConfig());
     setConversations(getWaConversations());
+    setWaContacts(getWaContacts());
   }, []);
 
   useEffect(() => {
@@ -518,5 +898,5 @@ export function useWhatsAppCenter() {
     return next;
   }, []);
 
-  return { config, conversations, updateConfig, refresh };
+  return { config, conversations, waContacts, updateConfig, refresh };
 }

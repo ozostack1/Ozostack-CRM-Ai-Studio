@@ -193,9 +193,11 @@ function sanitizeWaUserId(userId) {
 function getOrCreateWaSessionEntry(userId) {
   const safeId = sanitizeWaUserId(userId);
   if (!waSessions.has(safeId)) {
-    waSessions.set(safeId, {
+    const authDir = path.join(os.tmpdir(), `ozostack_wa_auth_${safeId}`);
+    const session = {
       userId: safeId,
-      authDir: path.join(os.tmpdir(), `ozostack_wa_auth_${safeId}`),
+      authDir,
+      storeFile: path.join(authDir, 'ozostack_wa_sync_cache.json'),
       sock: null,
       status: 'disconnected',
       qrDataUrl: '',
@@ -203,11 +205,101 @@ function getOrCreateWaSessionEntry(userId) {
       pushName: '',
       lastError: '',
       incomingMessages: [],
+      messagesMap: new Map(), // msgId -> message payload
+      contactsMap: new Map(), // digits -> { id, phone, jid, name, notify }
+      chatsMap: new Map(), // digits -> { id, phone, jid, name, unreadCount, lastTimestamp }
+      lidToPhone: new Map(), // lidUser -> digits
+      rawMessagesForRetry: new Map(), // msgId -> proto.IMessage
       waiters: [],
       starting: false,
-    });
+      saveTimer: null,
+    };
+    loadWaSessionCacheFromDisk(session);
+    loadWaSessionCacheFromDb(session).catch(() => {});
+    waSessions.set(safeId, session);
   }
   return waSessions.get(safeId);
+}
+
+function loadWaSessionCacheFromDisk(session) {
+  try {
+    if (fs.existsSync(session.storeFile)) {
+      const raw = JSON.parse(fs.readFileSync(session.storeFile, 'utf8'));
+      applySerializedWaStore(session, raw);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+async function loadWaSessionCacheFromDb(session) {
+  try {
+    const db = await getDb();
+    if (!db) return;
+    const doc = await db
+      .collection(KV_COLLECTION)
+      .findOne({ _id: `server_wa_store_v1_${session.userId}` });
+    if (doc && typeof doc.value === 'string') {
+      const raw = JSON.parse(doc.value);
+      applySerializedWaStore(session, raw);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function applySerializedWaStore(session, raw) {
+  if (!raw || typeof raw !== 'object') return;
+  if (Array.isArray(raw.contacts)) {
+    for (const c of raw.contacts) {
+      if (c && c.id) session.contactsMap.set(c.id, c);
+    }
+  }
+  if (Array.isArray(raw.chats)) {
+    for (const ch of raw.chats) {
+      if (ch && ch.id) session.chatsMap.set(ch.id, ch);
+    }
+  }
+  if (Array.isArray(raw.messages)) {
+    for (const m of raw.messages) {
+      if (m && m.id) session.messagesMap.set(m.id, m);
+    }
+  }
+  if (Array.isArray(raw.lidPairs)) {
+    for (const [k, v] of raw.lidPairs) {
+      if (k && v) session.lidToPhone.set(k, v);
+    }
+  }
+}
+
+function scheduleSaveWaSessionCache(session) {
+  if (session.saveTimer) return;
+  session.saveTimer = setTimeout(async () => {
+    session.saveTimer = null;
+    try {
+      const messagesArr = Array.from(session.messagesMap.values()).slice(-1500);
+      const payload = {
+        contacts: Array.from(session.contactsMap.values()).slice(0, 3000),
+        chats: Array.from(session.chatsMap.values()).slice(0, 1000),
+        messages: messagesArr,
+        lidPairs: Array.from(session.lidToPhone.entries()).slice(0, 3000),
+        updatedAt: new Date().toISOString(),
+      };
+      const serialized = JSON.stringify(payload);
+      fs.mkdirSync(session.authDir, { recursive: true });
+      fs.writeFileSync(session.storeFile, serialized, 'utf8');
+      const db = await getDb();
+      if (db) {
+        await db.collection(KV_COLLECTION).updateOne(
+          { _id: `server_wa_store_v1_${session.userId}` },
+          { $set: { value: serialized, updatedAt: payload.updatedAt } },
+          { upsert: true }
+        );
+      }
+    } catch {
+      /* ignore */
+    }
+  }, 1500);
 }
 
 function resolveWaWaiters(session) {
@@ -218,6 +310,327 @@ function resolveWaWaiters(session) {
     } catch {
       /* ignore */
     }
+  }
+}
+
+function normalizeWaDigits(raw) {
+  const d = String(raw || '').split(':')[0].split('@')[0].replace(/[^0-9]/g, '');
+  if (d.length === 10) return `91${d}`;
+  return d;
+}
+
+function registerWaLidMapping(session, jidA, jidB) {
+  if (!jidA || !jidB) return;
+  const a = String(jidA);
+  const b = String(jidB);
+  if (a.endsWith('@lid') && b.includes('@s.whatsapp.net')) {
+    const lidKey = a.split(':')[0].split('@')[0];
+    const phoneDigits = normalizeWaDigits(b);
+    if (lidKey && phoneDigits) session.lidToPhone.set(lidKey, phoneDigits);
+  } else if (b.endsWith('@lid') && a.includes('@s.whatsapp.net')) {
+    const lidKey = b.split(':')[0].split('@')[0];
+    const phoneDigits = normalizeWaDigits(a);
+    if (lidKey && phoneDigits) session.lidToPhone.set(lidKey, phoneDigits);
+  }
+}
+
+function resolveWaJidToIdentity(session, rawJid, altJid) {
+  if (rawJid && altJid) {
+    registerWaLidMapping(session, rawJid, altJid);
+  }
+  const jid = String(rawJid || altJid || '').trim();
+  if (
+    !jid ||
+    jid === 'status@broadcast' ||
+    jid.endsWith('@broadcast') ||
+    jid.endsWith('@newsletter') ||
+    jid.endsWith('@g.us')
+  ) {
+    return null;
+  }
+
+  const userPart = jid.split(':')[0].split('@')[0].replace(/[^0-9]/g, '');
+  if (!userPart) return null;
+
+  if (jid.endsWith('@lid')) {
+    const mappedPhone =
+      session.lidToPhone.get(userPart) ||
+      (altJid && String(altJid).includes('@s.whatsapp.net') ? normalizeWaDigits(altJid) : '');
+    const finalDigits = mappedPhone || userPart;
+    return {
+      digits: finalDigits,
+      phone: `+${finalDigits}`,
+      jid: mappedPhone ? `${mappedPhone}@s.whatsapp.net` : jid,
+    };
+  }
+
+  const digits = normalizeWaDigits(userPart);
+  return {
+    digits,
+    phone: `+${digits}`,
+    jid: `${digits}@s.whatsapp.net`,
+  };
+}
+
+function upsertWaServerContact(session, rawContact) {
+  if (!rawContact) return;
+  registerWaLidMapping(session, rawContact.id, rawContact.lid || rawContact.phoneNumber || rawContact.jid);
+  const identity = resolveWaJidToIdentity(
+    session,
+    rawContact.id || rawContact.jid || rawContact.phoneNumber,
+    rawContact.lid || rawContact.phoneNumber
+  );
+  if (!identity) return;
+
+  // Skip user's own number
+  const myDigits = normalizeWaDigits(session.phoneNumber);
+  if (myDigits && identity.digits === myDigits) return;
+
+  const existing = session.contactsMap.get(identity.digits);
+  const candidateName =
+    rawContact.name ||
+    rawContact.verifiedName ||
+    rawContact.notify ||
+    rawContact.pushName ||
+    existing?.name ||
+    '';
+  const cleanName =
+    candidateName && !String(candidateName).startsWith('+') ? String(candidateName).trim() : '';
+
+  session.contactsMap.set(identity.digits, {
+    id: identity.digits,
+    phone: identity.phone,
+    jid: identity.jid,
+    name: cleanName || existing?.name || identity.phone,
+    notify: rawContact.notify || rawContact.pushName || existing?.notify || '',
+  });
+}
+
+function upsertWaServerChat(session, rawChat) {
+  if (!rawChat) return;
+  const identity = resolveWaJidToIdentity(
+    session,
+    rawChat.id || rawChat.jid,
+    rawChat.lidJid || rawChat.pnJid || rawChat.phoneNumber
+  );
+  if (!identity) return;
+
+  const myDigits = normalizeWaDigits(session.phoneNumber);
+  if (myDigits && identity.digits === myDigits) return;
+
+  const existingContact = session.contactsMap.get(identity.digits);
+  const chatName =
+    rawChat.name ||
+    rawChat.displayName ||
+    rawChat.subject ||
+    (existingContact?.name && !existingContact.name.startsWith('+') ? existingContact.name : '') ||
+    identity.phone;
+
+  if (chatName && !String(chatName).startsWith('+')) {
+    upsertWaServerContact(session, {
+      id: identity.jid,
+      name: chatName,
+    });
+  }
+
+  const tsNum = Number(
+    rawChat.conversationTimestamp?.low ||
+      rawChat.conversationTimestamp ||
+      rawChat.lastMessageRecvTimestamp ||
+      0
+  );
+  const tsIso =
+    tsNum > 0
+      ? new Date(tsNum > 1e12 ? tsNum : tsNum * 1000).toISOString()
+      : new Date().toISOString();
+
+  const existingChat = session.chatsMap.get(identity.digits);
+  session.chatsMap.set(identity.digits, {
+    id: identity.digits,
+    phone: identity.phone,
+    jid: identity.jid,
+    name:
+      chatName && !String(chatName).startsWith('+')
+        ? String(chatName).trim()
+        : existingChat?.name || existingContact?.name || identity.phone,
+    unreadCount:
+      typeof rawChat.unreadCount === 'number' && rawChat.unreadCount >= 0
+        ? rawChat.unreadCount
+        : existingChat?.unreadCount || 0,
+    lastTimestamp: tsIso,
+  });
+
+  if (Array.isArray(rawChat.messages)) {
+    for (const item of rawChat.messages) {
+      const m = item?.message || item;
+      if (m && m.key) {
+        ingestWaMessage(session, m, true);
+      }
+    }
+  }
+}
+
+function unwrapWaMessageObject(msgObj) {
+  let m = msgObj;
+  for (let i = 0; i < 6 && m; i++) {
+    if (m.ephemeralMessage?.message) {
+      m = m.ephemeralMessage.message;
+    } else if (m.viewOnceMessage?.message) {
+      m = m.viewOnceMessage.message;
+    } else if (m.viewOnceMessageV2?.message) {
+      m = m.viewOnceMessageV2.message;
+    } else if (m.viewOnceMessageV2Extension?.message) {
+      m = m.viewOnceMessageV2Extension.message;
+    } else if (m.documentWithCaptionMessage?.message) {
+      m = m.documentWithCaptionMessage.message;
+    } else if (m.editedMessage?.message?.protocolMessage?.editedMessage) {
+      m = m.editedMessage.message.protocolMessage.editedMessage;
+    } else if (m.editedMessage?.message) {
+      m = m.editedMessage.message;
+    } else {
+      break;
+    }
+  }
+  return m;
+}
+
+function extractWaMessageText(rawMessage) {
+  const m = unwrapWaMessageObject(rawMessage);
+  if (!m) return '';
+  if (m.protocolMessage || m.senderKeyDistributionMessage || m.fastRatchetKeySenderKeyDistributionMessage) {
+    return '';
+  }
+
+  const directText =
+    m.conversation ||
+    m.extendedTextMessage?.text ||
+    m.imageMessage?.caption ||
+    m.videoMessage?.caption ||
+    m.documentMessage?.caption ||
+    m.buttonsResponseMessage?.selectedDisplayText ||
+    m.listResponseMessage?.title ||
+    m.templateButtonReplyMessage?.selectedDisplayText ||
+    m.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson ||
+    '';
+
+  if (directText && String(directText).trim()) {
+    return String(directText).trim();
+  }
+
+  if (m.imageMessage) return '📷 [Photo]';
+  if (m.videoMessage) return '🎥 [Video]';
+  if (m.audioMessage) return m.audioMessage.ptt ? '🎤 [Voice Message]' : '🎵 [Audio]';
+  if (m.documentMessage) return `📄 [Document: ${m.documentMessage.fileName || 'File'}]`;
+  if (m.stickerMessage) return '🏷️ [Sticker]';
+  if (m.contactMessage) return `👤 [Contact: ${m.contactMessage.displayName || 'Shared'}]`;
+  if (m.contactsArrayMessage) return '👥 [Shared Contacts]';
+  if (m.locationMessage || m.liveLocationMessage) return '📍 [Location Shared]';
+  if (m.pollCreationMessage || m.pollCreationMessageV2 || m.pollCreationMessageV3) {
+    const pollName =
+      m.pollCreationMessage?.name ||
+      m.pollCreationMessageV2?.name ||
+      m.pollCreationMessageV3?.name ||
+      'Poll';
+    return `📊 [Poll: ${pollName}]`;
+  }
+  return '';
+}
+
+function ingestWaMessage(session, msg, isHistory = false) {
+  try {
+    if (!msg || !msg.key) return;
+    const remoteJid = msg.key.remoteJid || '';
+    const altJid = msg.key.senderPn || msg.key.participantPn || msg.key.remoteJidAlt || '';
+    const identity = resolveWaJidToIdentity(session, remoteJid, altJid);
+    if (!identity) return;
+
+    const myDigits = normalizeWaDigits(session.phoneNumber);
+    if (myDigits && identity.digits === myDigits) return;
+
+    const text = extractWaMessageText(msg.message);
+    if (!text) return;
+
+    const fromMe = Boolean(msg.key.fromMe);
+    if (msg.key.id && msg.message) {
+      session.rawMessagesForRetry.set(msg.key.id, msg.message);
+      if (session.rawMessagesForRetry.size > 500) {
+        const firstKey = session.rawMessagesForRetry.keys().next().value;
+        session.rawMessagesForRetry.delete(firstKey);
+      }
+    }
+
+    if (!fromMe && msg.pushName) {
+      upsertWaServerContact(session, {
+        id: identity.jid,
+        notify: msg.pushName,
+        name: msg.pushName,
+      });
+    }
+
+    const contactEntry = session.contactsMap.get(identity.digits);
+    const chatEntry = session.chatsMap.get(identity.digits);
+    const resolvedName =
+      (contactEntry?.name && !contactEntry.name.startsWith('+') ? contactEntry.name : '') ||
+      (chatEntry?.name && !chatEntry.name.startsWith('+') ? chatEntry.name : '') ||
+      (!fromMe && msg.pushName ? msg.pushName : '') ||
+      contactEntry?.notify ||
+      identity.phone;
+
+    const rawTs = Number(msg.messageTimestamp?.low || msg.messageTimestamp || 0);
+    const ts =
+      rawTs > 0
+        ? new Date(rawTs > 1e12 ? rawTs : rawTs * 1000).toISOString()
+        : new Date().toISOString();
+
+    const msgId = `wa-live-${msg.key.id || `${identity.digits}-${rawTs || Date.now()}`}`;
+    const payload = {
+      id: msgId,
+      phone: identity.phone,
+      contactPhone: identity.phone,
+      pushName: resolvedName,
+      contactName: resolvedName,
+      fromMe,
+      isHistory: Boolean(isHistory),
+      direction: fromMe ? 'outbound' : 'inbound',
+      text,
+      body: text,
+      timestamp: ts,
+      status: fromMe ? 'delivered' : 'received',
+      read: Boolean(isHistory || fromMe),
+      via: 'qr_session',
+    };
+
+    const alreadyHad = session.messagesMap.has(msgId);
+    session.messagesMap.set(msgId, payload);
+    if (session.messagesMap.size > 2000) {
+      const oldestKey = session.messagesMap.keys().next().value;
+      session.messagesMap.delete(oldestKey);
+    }
+
+    if (!session.contactsMap.has(identity.digits)) {
+      upsertWaServerContact(session, {
+        id: identity.jid,
+        name: resolvedName,
+      });
+    }
+
+    session.chatsMap.set(identity.digits, {
+      id: identity.digits,
+      phone: identity.phone,
+      jid: identity.jid,
+      name: resolvedName,
+      unreadCount: !fromMe && !isHistory ? (chatEntry?.unreadCount || 0) + 1 : chatEntry?.unreadCount || 0,
+      lastTimestamp: ts,
+    });
+
+    if (!alreadyHad) {
+      session.incomingMessages.push(payload);
+      if (session.incomingMessages.length > 1500) {
+        session.incomingMessages.splice(0, session.incomingMessages.length - 1500);
+      }
+    }
+  } catch {
+    /* ignore malformed message */
   }
 }
 
@@ -249,8 +662,12 @@ async function startBaileysSocket(session) {
       printQRInTerminal: false,
       logger: pino({ level: 'silent' }),
       browser: ['OzoStack CRM', 'Chrome', '120.0.0'],
-      syncFullHistory: false,
+      syncFullHistory: true,
+      shouldSyncHistoryMessage: () => true,
       markOnlineOnConnect: false,
+      getMessage: async (key) => {
+        return session.rawMessagesForRetry.get(key?.id) || undefined;
+      },
     });
 
     session.sock = sock;
@@ -258,7 +675,112 @@ async function startBaileysSocket(session) {
       session.status = 'qr_pending';
     }
 
-    sock.ev.on('creds.update', saveCreds);
+    // Ensure Baileys event buffer never traps history/contacts events
+    const flushInterval = setInterval(() => {
+      if (session.sock !== sock) {
+        clearInterval(flushInterval);
+        return;
+      }
+      try {
+        if (sock.ev?.isBuffering?.()) {
+          sock.ev.flush(true);
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 1500);
+
+    sock.ev.on('creds.update', async (update) => {
+      try {
+        if (update && typeof update === 'object') {
+          Object.assign(state.creds, update);
+        }
+        await saveCreds();
+        if (update?.myAppStateKeyId) {
+          // App state sync key arrived: decode full address book contacts & chat state
+          setTimeout(async () => {
+            try {
+              await sock.resyncAppState?.(
+                ['critical_block', 'critical_unblock_low', 'regular_high', 'regular_low', 'regular'],
+                true
+              );
+            } catch {
+              /* ignore */
+            }
+            try {
+              sock.ev?.flush?.(true);
+            } catch {
+              /* ignore */
+            }
+          }, 400);
+        }
+      } catch {
+        /* ignore */
+      }
+    });
+
+    // 1. Full History Sync (Chats + Contacts + Past Messages from phone)
+    sock.ev.on('messaging-history.set', (historyData) => {
+      try {
+        const { chats = [], contacts = [], messages = [] } = historyData || {};
+        for (const c of contacts) {
+          upsertWaServerContact(session, c);
+        }
+        for (const ch of chats) {
+          upsertWaServerChat(session, ch);
+        }
+        for (const m of messages) {
+          ingestWaMessage(session, m, true);
+        }
+        scheduleSaveWaSessionCache(session);
+      } catch {
+        /* ignore */
+      }
+    });
+
+    // 2. Contacts Sync (Address book & pushNames)
+    sock.ev.on('contacts.upsert', (contacts) => {
+      if (!Array.isArray(contacts)) return;
+      for (const c of contacts) {
+        upsertWaServerContact(session, c);
+      }
+      scheduleSaveWaSessionCache(session);
+    });
+
+    sock.ev.on('contacts.update', (updates) => {
+      if (!Array.isArray(updates)) return;
+      for (const u of updates) {
+        upsertWaServerContact(session, u);
+      }
+      scheduleSaveWaSessionCache(session);
+    });
+
+    // 3. Chats Sync
+    sock.ev.on('chats.upsert', (chats) => {
+      if (!Array.isArray(chats)) return;
+      for (const ch of chats) {
+        upsertWaServerChat(session, ch);
+      }
+      scheduleSaveWaSessionCache(session);
+    });
+
+    sock.ev.on('chats.update', (updates) => {
+      if (!Array.isArray(updates)) return;
+      for (const ch of updates) {
+        upsertWaServerChat(session, ch);
+      }
+      scheduleSaveWaSessionCache(session);
+    });
+
+    // 4. Live & Appended Messages Sync (Both Inbound & Outbound from phone)
+    sock.ev.on('messages.upsert', (m) => {
+      if (!m || !Array.isArray(m.messages)) return;
+      const isHistory = m.type !== 'notify';
+      for (const msg of m.messages) {
+        ingestWaMessage(session, msg, isHistory);
+      }
+      scheduleSaveWaSessionCache(session);
+    });
 
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
@@ -283,9 +805,48 @@ async function startBaileysSocket(session) {
         session.phoneNumber = digits ? `+${digits}` : session.phoneNumber || 'Linked WhatsApp';
         session.pushName = sock.user?.name || session.pushName || 'WhatsApp Linked';
         resolveWaWaiters(session);
+
+        // Proactively flush buffer, resync app state contacts, and harvest contacts from participating groups
+        setTimeout(async () => {
+          try {
+            sock.ev?.flush?.(true);
+          } catch {
+            /* ignore */
+          }
+          try {
+            if (state.creds?.myAppStateKeyId) {
+              await sock.resyncAppState?.(
+                ['critical_block', 'critical_unblock_low', 'regular_high', 'regular_low', 'regular'],
+                false
+              );
+            }
+          } catch {
+            /* ignore */
+          }
+          try {
+            const groups = await sock.groupFetchAllParticipating?.();
+            if (groups && typeof groups === 'object') {
+              for (const g of Object.values(groups)) {
+                const participants = Array.isArray(g?.participants) ? g.participants : [];
+                for (const p of participants) {
+                  upsertWaServerContact(session, {
+                    id: p.phoneNumber || p.jid || p.id,
+                    lid: p.lid || (String(p.id || '').endsWith('@lid') ? p.id : undefined),
+                    name: p.name || p.notify,
+                    notify: p.notify,
+                  });
+                }
+              }
+              scheduleSaveWaSessionCache(session);
+            }
+          } catch {
+            /* ignore */
+          }
+        }, 1800);
       }
 
       if (connection === 'close') {
+        clearInterval(flushInterval);
         const statusCode =
           lastDisconnect?.error?.output?.statusCode ||
           lastDisconnect?.error?.statusCode ||
@@ -313,60 +874,16 @@ async function startBaileysSocket(session) {
             startBaileysSocket(session).catch(() => {});
           }, 300);
         } else {
-          session.status = 'disconnected';
-          resolveWaWaiters(session);
-        }
-      }
-    });
-
-    sock.ev.on('messages.upsert', (m) => {
-      if (!m || !Array.isArray(m.messages)) return;
-      for (const msg of m.messages) {
-        try {
-          if (!msg.message) continue;
-          const remoteJid = msg.key?.remoteJid || '';
-          if (!remoteJid || remoteJid === 'status@broadcast' || remoteJid.endsWith('@g.us')) {
-            continue;
+          // If credentials already exist on disk, attempt automatic reconnect
+          const credsFile = path.join(session.authDir, 'creds.json');
+          if (fs.existsSync(credsFile)) {
+            setTimeout(() => {
+              startBaileysSocket(session).catch(() => {});
+            }, 1500);
+          } else {
+            session.status = 'disconnected';
+            resolveWaWaiters(session);
           }
-          if (msg.key?.fromMe) continue;
-
-          const digits = remoteJid.split('@')[0].replace(/[^0-9]/g, '');
-          if (!digits) continue;
-
-          const text =
-            msg.message.conversation ||
-            msg.message.extendedTextMessage?.text ||
-            msg.message.imageMessage?.caption ||
-            msg.message.videoMessage?.caption ||
-            msg.message.documentMessage?.caption ||
-            '';
-          if (!text) continue;
-
-          const ts = msg.messageTimestamp
-            ? new Date(Number(msg.messageTimestamp) * 1000).toISOString()
-            : new Date().toISOString();
-
-          session.incomingMessages.push({
-            id: `wa-live-${msg.key?.id || Date.now()}`,
-            phone: `+${digits}`,
-            contactPhone: `+${digits}`,
-            pushName: msg.pushName || `+${digits}`,
-            contactName: msg.pushName || `+${digits}`,
-            fromMe: false,
-            direction: 'inbound',
-            text,
-            body: text,
-            timestamp: ts,
-            status: 'received',
-            read: false,
-            via: 'qr_session',
-          });
-
-          if (session.incomingMessages.length > 100) {
-            session.incomingMessages.splice(0, session.incomingMessages.length - 100);
-          }
-        } catch {
-          /* ignore malformed incoming message */
         }
       }
     });
@@ -737,12 +1254,29 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/whatsapp/connect' && req.method === 'POST') {
       const body = await readJsonBody(req);
       const userId = body.userId;
+      const forceReset = Boolean(body.forceReset);
       if (!userId) {
         sendJson(res, 400, { ok: false, error: 'userId is required for isolated WhatsApp session.' });
         return;
       }
 
       const session = getOrCreateWaSessionEntry(userId);
+
+      if (forceReset) {
+        try {
+          await session.sock?.logout?.();
+        } catch {
+          /* ignore */
+        }
+        try {
+          session.sock?.end?.();
+        } catch {
+          /* ignore */
+        }
+        session.sock = null;
+        session.status = 'disconnected';
+        session.qrDataUrl = '';
+      }
 
       // If user asks for a fresh QR and isn't connected, reset stale socket
       if (session.status !== 'connected' && (!session.sock || !session.qrDataUrl)) {
@@ -777,16 +1311,61 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // 2. Poll per-user WhatsApp session status & drain live incoming messages
+    // 2. Poll per-user WhatsApp session status, contacts, chats & live/history messages
     if (pathname === '/api/whatsapp/status' && req.method === 'GET') {
       const userId = parsedUrl.searchParams.get('userId');
+      const fullSync = parsedUrl.searchParams.get('full') === '1';
       if (!userId) {
         sendJson(res, 200, { ok: false, status: 'disconnected', incomingMessages: [] });
         return;
       }
 
       const session = getOrCreateWaSessionEntry(userId);
-      const incomingMessages = session.incomingMessages.splice(0, session.incomingMessages.length);
+
+      // Auto-resume Baileys socket if creds exist on disk and socket isn't running
+      if (!session.sock && !session.starting && session.status === 'disconnected') {
+        const credsFile = path.join(session.authDir, 'creds.json');
+        if (fs.existsSync(credsFile)) {
+          startBaileysSocket(session).catch(() => {});
+        }
+      }
+
+      // Flush any buffered Baileys events immediately
+      try {
+        if (session.sock?.ev?.isBuffering?.()) {
+          session.sock.ev.flush(true);
+        }
+      } catch {
+        /* ignore */
+      }
+
+      // If fullSync requested and socket is open, also trigger active app-state & group contact harvest
+      if (fullSync && session.sock && session.status === 'connected') {
+        try {
+          await session.sock.resyncAppState?.(
+            ['critical_block', 'critical_unblock_low', 'regular_high', 'regular_low', 'regular'],
+            false
+          );
+        } catch {
+          /* ignore */
+        }
+        try {
+          session.sock.ev?.flush?.(true);
+        } catch {
+          /* ignore */
+        }
+      }
+
+      let incomingMessages;
+      if (fullSync) {
+        session.incomingMessages.splice(0, session.incomingMessages.length);
+        incomingMessages = Array.from(session.messagesMap.values());
+      } else {
+        incomingMessages = session.incomingMessages.splice(0, session.incomingMessages.length);
+      }
+
+      const syncedContacts = Array.from(session.contactsMap.values());
+      const syncedChats = Array.from(session.chatsMap.values());
 
       sendJson(res, 200, {
         ok: true,
@@ -795,6 +1374,10 @@ const server = http.createServer(async (req, res) => {
         phoneNumber: session.phoneNumber,
         pushName: session.pushName,
         incomingMessages,
+        syncedContacts,
+        syncedChats,
+        totalContacts: syncedContacts.length,
+        totalMessages: session.messagesMap.size,
       });
       return;
     }
@@ -803,7 +1386,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/whatsapp/send' && req.method === 'POST') {
       const body = await readJsonBody(req);
       const userId = body.userId;
-      const digits = String(body.toPhone || body.to || '').replace(/[^0-9]/g, '');
+      const digits = normalizeWaDigits(body.toPhone || body.to || '');
       const text = String(body.text || '').trim();
 
       if (!digits || !text) {
@@ -816,13 +1399,33 @@ const server = http.createServer(async (req, res) => {
       // Priority A: Active Baileys QR session for this user
       if (session && session.status === 'connected' && session.sock) {
         try {
-          const jid = `${digits}@s.whatsapp.net`;
+          const knownContact = session.contactsMap.get(digits) || session.chatsMap.get(digits);
+          const jid = knownContact?.jid || `${digits}@s.whatsapp.net`;
           const sent = await session.sock.sendMessage(jid, { text });
+          const msgId = `wa-live-${sent?.key?.id || Date.now()}`;
+          const nowIso = new Date().toISOString();
+          session.messagesMap.set(msgId, {
+            id: msgId,
+            phone: `+${digits}`,
+            contactPhone: `+${digits}`,
+            pushName: knownContact?.name || `+${digits}`,
+            contactName: knownContact?.name || `+${digits}`,
+            fromMe: true,
+            isHistory: false,
+            direction: 'outbound',
+            text,
+            body: text,
+            timestamp: nowIso,
+            status: 'delivered',
+            read: true,
+            via: 'qr_session',
+          });
+          scheduleSaveWaSessionCache(session);
           sendJson(res, 200, {
             ok: true,
             realDelivered: true,
             via: 'qr_session',
-            messageId: sent?.key?.id || `wa-qr-${Date.now()}`,
+            messageId: msgId,
           });
           return;
         } catch (sendErr) {
@@ -918,8 +1521,22 @@ const server = http.createServer(async (req, res) => {
         session.phoneNumber = '';
         session.pushName = '';
         session.incomingMessages = [];
+        session.messagesMap.clear();
+        session.contactsMap.clear();
+        session.chatsMap.clear();
+        session.lidToPhone.clear();
         try {
           fs.rmSync(session.authDir, { recursive: true, force: true });
+        } catch {
+          /* ignore */
+        }
+        try {
+          const db = await getDb();
+          if (db) {
+            await db
+              .collection(KV_COLLECTION)
+              .deleteOne({ _id: `server_wa_store_v1_${session.userId}` });
+          }
         } catch {
           /* ignore */
         }
@@ -1004,7 +1621,12 @@ const server = http.createServer(async (req, res) => {
       const docs = await db.collection(KV_COLLECTION).find({}).toArray();
       const items = {};
       for (const doc of docs) {
-        if (doc && typeof doc._id === 'string' && typeof doc.value === 'string') {
+        if (
+          doc &&
+          typeof doc._id === 'string' &&
+          !doc._id.startsWith('server_') &&
+          typeof doc.value === 'string'
+        ) {
           items[doc._id] = doc.value;
         }
       }
