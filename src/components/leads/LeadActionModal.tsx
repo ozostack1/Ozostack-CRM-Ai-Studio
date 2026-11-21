@@ -352,7 +352,9 @@ export const LeadActionModal: React.FC<LeadActionModalProps> = ({
                 Contacting {lead.name} · {lead.company}
                 {actionType === 'email' && (
                   <span className="ml-1.5 text-sky-400 font-semibold">
-                    (From: {smtpConfig.senderEmail})
+                    {smtpConfig.senderEmail
+                      ? `(From: ${smtpConfig.senderEmail})`
+                      : '(Setup your email in Mail Settings)'}
                   </span>
                 )}
               </p>

@@ -77,14 +77,18 @@ async function getDb() {
 
 getDb().catch(() => {});
 
-async function resolveSmtpConfig(bodyConfig) {
+async function resolveSmtpConfig(bodyConfig, userId) {
   let stored = null;
   try {
-    const db = await getDb();
-    if (db) {
-      const doc = await db.collection(KV_COLLECTION).findOne({ _id: SMTP_KV_KEY });
-      if (doc && typeof doc.value === 'string') {
-        stored = JSON.parse(doc.value);
+    if (userId) {
+      const db = await getDb();
+      if (db) {
+        const doc = await db
+          .collection(KV_COLLECTION)
+          .findOne({ _id: `ozostack_smtp_user_v2_${userId}` });
+        if (doc && typeof doc.value === 'string') {
+          stored = JSON.parse(doc.value);
+        }
       }
     }
   } catch {
@@ -92,16 +96,16 @@ async function resolveSmtpConfig(bodyConfig) {
   }
 
   return {
-    senderName: process.env.SMTP_SENDER_NAME || 'OzoStack CRM',
-    senderEmail: process.env.SMTP_FROM || process.env.SMTP_USER || 'ozostack@gmail.com',
-    replyToEmail: process.env.SMTP_FROM || process.env.SMTP_USER || 'ozostack@gmail.com',
-    host: process.env.SMTP_HOST || 'smtp.gmail.com',
-    port: Number(process.env.SMTP_PORT) || 587,
-    imapHost: process.env.IMAP_HOST || '',
-    imapPort: Number(process.env.IMAP_PORT) || 993,
-    encryption: 'TLS',
-    username: process.env.SMTP_USER || 'ozostack@gmail.com',
-    password: process.env.SMTP_PASS || '',
+    senderName: 'OzoStack User',
+    senderEmail: '',
+    replyToEmail: '',
+    host: 'smtp.hostinger.com',
+    port: 465,
+    imapHost: 'imap.hostinger.com',
+    imapPort: 993,
+    encryption: 'SSL',
+    username: '',
+    password: '',
     ...(stored || {}),
     ...(bodyConfig || {}),
   };
@@ -252,7 +256,17 @@ const server = http.createServer(async (req, res) => {
     // Verify real SMTP credentials
     if (pathname === '/api/verify-smtp' && req.method === 'POST') {
       const body = await readJsonBody(req);
-      const cfg = await resolveSmtpConfig(body.smtpConfig);
+      const cfg = await resolveSmtpConfig(body.smtpConfig, body.userId);
+
+      if (!cfg.senderEmail || !String(cfg.senderEmail).includes('@')) {
+        sendJson(res, 200, {
+          ok: false,
+          verified: false,
+          code: 'NO_EMAIL',
+          error: 'Please enter your own email address first.',
+        });
+        return;
+      }
 
       if (isPlaceholderPassword(cfg.password)) {
         sendJson(res, 200, {
@@ -306,10 +320,22 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const cfg = await resolveSmtpConfig(body.smtpConfig);
+      const cfg = await resolveSmtpConfig(body.smtpConfig, body.userId);
+      if (!cfg.senderEmail || !String(cfg.senderEmail).includes('@')) {
+        sendJson(res, 200, {
+          ok: false,
+          sentViaSmtp: false,
+          realExternalDelivery: false,
+          code: 'NO_EMAIL',
+          senderEmail: '',
+          error: 'You have not configured your email account yet. Please set up your email in Mail Settings.',
+        });
+        return;
+      }
+
       const { transporter, host, port, authUser, cleanPass } = buildNodemailerTransport(cfg);
-      const fromName = (cfg.senderName || 'OzoStack CRM').replace(/"/g, '');
-      const fromEmail = (cfg.senderEmail || authUser || 'ozostack@gmail.com').trim();
+      const fromName = (cfg.senderName || 'OzoStack User').replace(/"/g, '');
+      const fromEmail = (cfg.senderEmail || authUser).trim();
       const renderedHtml =
         html ||
         `<div style="font-family:Inter,Arial,sans-serif;font-size:14px;line-height:1.6;color:#0f172a;white-space:pre-wrap;">${escapeHtml(
@@ -371,8 +397,18 @@ const server = http.createServer(async (req, res) => {
     // Real IMAP Inbox Sync Endpoint (fetches actual incoming emails from Domain Mail / Gmail)
     if (pathname === '/api/sync-inbox' && req.method === 'POST') {
       const body = await readJsonBody(req);
-      const cfg = await resolveSmtpConfig(body.smtpConfig);
+      const cfg = await resolveSmtpConfig(body.smtpConfig, body.userId);
       const rawPassword = String(cfg.password || '').trim();
+
+      if (!cfg.senderEmail || !String(cfg.senderEmail).includes('@')) {
+        sendJson(res, 200, {
+          ok: false,
+          synced: false,
+          code: 'NO_EMAIL',
+          error: 'Please configure your own email address and password first.',
+        });
+        return;
+      }
 
       if (isPlaceholderPassword(rawPassword)) {
         sendJson(res, 200, {

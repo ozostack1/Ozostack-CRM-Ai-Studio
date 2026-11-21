@@ -36,7 +36,7 @@ import {
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useSystemCurrency, formatMoney } from '../../data/currencyService';
-import { PermAction } from '../../context/authData';
+import { PermAction, DEFAULT_PASSWORD } from '../../context/authData';
 import {
   INITIAL_EMPLOYEES,
   DEPARTMENTS_DATA,
@@ -129,7 +129,7 @@ export const TeamView: React.FC = () => {
   const { theme, setActiveNav } = useTheme();
   const { currency } = useSystemCurrency();
   const isLight = theme === 'white-sky';
-  const { can, scopeFilter, currentUser } = useAuth();
+  const { can, scopeFilter, currentUser, users, saveUser } = useAuth();
   const byMember = (r: { department: string; memberId: string; memberName?: string }) => ({
     owner: r.memberName,
     department: r.department,
@@ -297,6 +297,26 @@ export const TeamView: React.FC = () => {
   const handleAddMember = (newMember: EmployeeMember) => {
     if (!allow('create')) return;
     setEmployees((prev) => [newMember, ...prev]);
+    if (
+      newMember.email &&
+      !users.some((u) => u.email.toLowerCase() === newMember.email.trim().toLowerCase())
+    ) {
+      saveUser({
+        id: `usr-${newMember.id}`,
+        name: newMember.name,
+        email: newMember.email.trim().toLowerCase(),
+        password: DEFAULT_PASSWORD,
+        roleId: 'employee',
+        department: newMember.department,
+        jobTitle: newMember.role,
+        employeeId: newMember.id,
+        status: 'Active',
+        mfaEnabled: false,
+        failedAttempts: 0,
+        createdAt: newMember.joinDate || new Date().toISOString().split('T')[0],
+        extraModules: [],
+      });
+    }
     setAttendance((prev) => [
       {
         id: `att-${Date.now()}`,

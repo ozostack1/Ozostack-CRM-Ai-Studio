@@ -228,8 +228,12 @@ export const SettingsView: React.FC = () => {
         localStorage.setItem('ozostack_pay_runs_v1', JSON.stringify(INITIAL_PAY_RUNS));
         localStorage.setItem('ozostack_reimbursements_v1', JSON.stringify(INITIAL_REIMBURSEMENT_CLAIMS));
         localStorage.setItem('ozostack_notifications_v4', JSON.stringify(INITIAL_NOTIFICATIONS));
-        localStorage.removeItem('ozostack_mailbox_messages_v1');
-        localStorage.setItem('ozostack_sent_emails_v1', JSON.stringify([]));
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && (k.startsWith('ozostack_mailbox_') || k.startsWith('ozostack_sentlog_'))) {
+            localStorage.setItem(k, JSON.stringify([]));
+          }
+        }
       } catch (err) {
         console.error('Reset mock data failed', err);
       }
@@ -266,8 +270,12 @@ export const SettingsView: React.FC = () => {
         localStorage.setItem('ozostack_pay_runs_v1', JSON.stringify([]));
         localStorage.setItem('ozostack_reimbursements_v1', JSON.stringify([]));
         localStorage.setItem('ozostack_notifications_v4', JSON.stringify([]));
-        localStorage.setItem('ozostack_mailbox_messages_v1', JSON.stringify([]));
-        localStorage.setItem('ozostack_sent_emails_v1', JSON.stringify([]));
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && (k.startsWith('ozostack_mailbox_') || k.startsWith('ozostack_sentlog_') || k.startsWith('ozostack_smtp_'))) {
+            localStorage.removeItem(k);
+          }
+        }
       } catch (err) {
         console.error('Wipe CRM data failed', err);
       }
@@ -507,7 +515,14 @@ export const SettingsView: React.FC = () => {
 
   const tabs: { id: TabId; label: string; icon: React.ComponentType<{ className?: string }>; show: boolean }[] = [
     { id: 'my-account', label: 'My Account & Login', icon: UserCheck, show: true },
-    { id: 'smtp', label: `Email & SMTP (${smtpConfig.senderEmail})`, icon: Mail, show: true },
+    {
+      id: 'smtp',
+      label: smtpConfig.senderEmail
+        ? `My Email & SMTP (${smtpConfig.senderEmail})`
+        : 'My Email & SMTP (Setup Mail)',
+      icon: Mail,
+      show: true,
+    },
     { id: 'staff', label: `Staff Logins (${users.length}/${MAX_STAFF_CAPACITY})`, icon: Users, show: isAdmin },
     { id: 'roles', label: `Roles & Permissions (${roles.length})`, icon: KeyRound, show: isAdmin },
     { id: 'crm-config', label: 'CRM, Lead & Pipeline Setup', icon: Sliders, show: isAdmin },

@@ -226,10 +226,10 @@ export const Sidebar: React.FC = () => {
         return { owner: [doc.uploadedBy, proj?.projectManager, ...(proj?.team || [])] };
       }).length,
       Invoices: INITIAL_DETAILED_INVOICES.length,
-      Email: readLS<{ folder?: string; read?: boolean }>('ozostack_mailbox_messages_v1', [
-        { folder: 'inbox', read: false },
-        { folder: 'inbox', read: false },
-      ]).filter((m) => m.folder === 'inbox' && !m.read).length,
+      Email: readLS<{ folder?: string; read?: boolean }>(
+        `ozostack_mailbox_user_v2_${currentUser?.id || 'anonymous'}`,
+        []
+      ).filter((m) => m.folder === 'inbox' && !m.read).length,
       Templates: readLS<{ id: string }>('ozostack_outreach_templates_v1', []).length || 9,
     };
   }, [scopeFilter, currentUser, activeNav, storeTick]);

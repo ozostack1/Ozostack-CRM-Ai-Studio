@@ -290,7 +290,9 @@ export const TemplatePreviewModal: React.FC<TemplatePreviewModalProps> = ({
                   ? 'Open in WhatsApp Web'
                   : isSending
                   ? 'Sending Email...'
-                  : `Send Direct Email (${smtpConfig.senderEmail})`}
+                  : smtpConfig.senderEmail
+                  ? `Send Direct Email (${smtpConfig.senderEmail})`
+                  : 'Send Direct Email'}
               </span>
               <ExternalLink className="w-3.5 h-3.5" />
             </button>

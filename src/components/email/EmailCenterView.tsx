@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Mail,
   Inbox,
@@ -17,16 +17,15 @@ import {
   MailOpen,
   ExternalLink,
   Bell,
-  Server,
   Eye,
   EyeOff,
   X,
-  Sparkles,
-  User,
   Globe,
   ShieldCheck,
+  Lock,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
+import { useAuth } from '../../context/AuthContext';
 import {
   useSmtpConfig,
   MailMessage,
@@ -46,8 +45,12 @@ import { DEFAULT_TEMPLATES, LeadMessageTemplate } from '../leads/LeadActionModal
 
 export const EmailCenterView: React.FC = () => {
   const { theme } = useTheme();
+  const { currentUser, scopeFilter } = useAuth();
   const isLight = theme === 'white-sky';
   const { config, messages, updateSmtpConfig } = useSmtpConfig();
+
+  const isEmailConfigured = Boolean(config.senderEmail && config.senderEmail.includes('@'));
+  const isPasswordConfigured = hasRealSmtpPassword(config.password);
 
   const [activeFolder, setActiveFolder] = useState<'inbox' | 'sent' | 'starred' | 'drafts' | 'trash'>('inbox');
   const [searchQuery, setSearchQuery] = useState('');
@@ -68,13 +71,20 @@ export const EmailCenterView: React.FC = () => {
   const [replyText, setReplyText] = useState('');
   const [isReplying, setIsReplying] = useState(false);
 
-  // IMAP Sync & SMTP Config Drawer State
+  // IMAP Sync & SMTP Config Drawer State (Auto-open if user hasn't configured their own email yet)
   const [isSyncing, setIsSyncing] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(!isEmailConfigured);
   const [smtpForm, setSmtpForm] = useState<SmtpConfig>(config);
   const [showPw, setShowPw] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
   const [verifyNotice, setVerifyNotice] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    setSmtpForm(config);
+    if (!config.senderEmail || !config.senderEmail.includes('@')) {
+      setIsSettingsOpen(true);
+    }
+  }, [config.ownerUserId, config.senderEmail]);
 
   // In-page Toast / Notification Banner
   const [bannerAlert, setBannerAlert] = useState<{
@@ -94,7 +104,7 @@ export const EmailCenterView: React.FC = () => {
     }, 6000);
   };
 
-  // CRM Leads & Contacts for quick recipient picker
+  // CRM Leads & Contacts scoped to current user
   const crmRecipients = useMemo(() => {
     const list: { name: string; email: string; company: string }[] = [];
     const seen = new Set<string>();
@@ -109,7 +119,8 @@ export const EmailCenterView: React.FC = () => {
       const rawLeads = localStorage.getItem('ozostack_leads_v2');
       const leads = rawLeads ? JSON.parse(rawLeads) : INITIAL_LEADS;
       if (Array.isArray(leads)) {
-        leads.forEach((l: any) => add(l.name, l.email, l.company));
+        const scoped = scopeFilter(leads, (l: any) => ({ owner: l.owner }));
+        scoped.forEach((l: any) => add(l.name, l.email, l.company));
       }
     } catch {}
 
@@ -117,12 +128,13 @@ export const EmailCenterView: React.FC = () => {
       const rawContacts = localStorage.getItem('ozostack_contacts_v1');
       const contacts = rawContacts ? JSON.parse(rawContacts) : INITIAL_CONTACTS;
       if (Array.isArray(contacts)) {
-        contacts.forEach((c: any) => add(c.name, c.email, c.company));
+        const scoped = scopeFilter(contacts, (c: any) => ({ owner: c.owner }));
+        scoped.forEach((c: any) => add(c.name, c.email, c.company));
       }
     } catch {}
 
     return list;
-  }, []);
+  }, [scopeFilter]);
 
   // Load templates
   const templates = useMemo<LeadMessageTemplate[]>(() => {
@@ -136,7 +148,7 @@ export const EmailCenterView: React.FC = () => {
     return DEFAULT_TEMPLATES;
   }, []);
 
-  // Folder counts
+  // Folder counts (strictly for the signed-in user's mailbox)
   const counts = useMemo(() => {
     const inboxAll = messages.filter((m) => m.folder === 'inbox');
     return {
@@ -219,6 +231,15 @@ export const EmailCenterView: React.FC = () => {
 
   // Sync live IMAP inbox
   const handleSyncInbox = async () => {
+    if (!isEmailConfigured) {
+      setIsSettingsOpen(true);
+      showBanner(
+        'error',
+        'Set Up Your Email First',
+        'Please enter your personal/domain email address and password below to sync your inbox.'
+      );
+      return;
+    }
     setIsSyncing(true);
     try {
       const res = await syncInboxViaImap(config);
@@ -237,20 +258,21 @@ export const EmailCenterView: React.FC = () => {
     }
   };
 
-  // Receive test incoming mail to verify inbox + notification bell
+  // Receive test incoming mail into the signed-in user's private inbox
   const handleReceiveTestInboundMail = () => {
+    const targetEmail = config.senderEmail || currentUser?.email || 'my-inbox@ozostack.in';
     const senders = [
       {
         name: 'Rohan Kapoor (Apex Global)',
         email: 'rohan.kapoor@apexglobal.in',
-        subject: 'New Enterprise CRM & AI Automation Inquiry — Apex Global',
-        body: `Hello Sayed,\n\nWe visited https://ozostack.in and would like to deploy OzoStack CRM for our 45-member sales and operations team.\n\nPlease share your commercial quotation and available onboarding dates this week.\n\nRegards,\nRohan Kapoor\nManaging Director, Apex Global`,
+        subject: `Project & Commercial Inquiry for ${currentUser?.name || 'OzoStack'}`,
+        body: `Hello ${currentUser?.name || 'there'},\n\nWe would like to schedule an implementation call this week regarding our enterprise CRM rollout.\n\nPlease share your available time slots.\n\nRegards,\nRohan Kapoor\nManaging Director, Apex Global`,
       },
       {
         name: 'Ananya Deshmukh (CloudScale Labs)',
         email: 'ananya@cloudscalelabs.io',
-        subject: 'Invoice & Contract Approval for OzoStack Implementation',
-        body: `Hi Team OzoStack,\n\nOur finance department has approved the proposal. Please send the formal invoice to accounts@cloudscalelabs.io so we can initiate the wire transfer today.\n\nBest,\nAnanya Deshmukh`,
+        subject: 'Proposal Approval & Next Steps',
+        body: `Hi ${currentUser?.name || 'Team'},\n\nOur team reviewed the scope and approved the proposal. Let us know the next steps to begin onboarding.\n\nBest,\nAnanya Deshmukh`,
       },
     ];
     const pick = senders[Math.floor(Math.random() * senders.length)];
@@ -259,8 +281,8 @@ export const EmailCenterView: React.FC = () => {
         folder: 'inbox',
         fromName: pick.name,
         fromEmail: pick.email,
-        toName: config.senderName || 'OzoStack CRM',
-        toEmail: config.senderEmail,
+        toName: currentUser?.name || config.senderName,
+        toEmail: targetEmail,
         subject: pick.subject,
         body: pick.body,
         read: false,
@@ -273,8 +295,8 @@ export const EmailCenterView: React.FC = () => {
     setSelectedMessageId(msg.id);
     showBanner(
       'received',
-      `New Email Received from ${pick.name}`,
-      `${pick.subject} — Notification added to top Notification Bell!`
+      `New Email Received in Your Inbox (${targetEmail})`,
+      `${pick.subject} — Notification added to your Notification Bell!`
     );
   };
 
@@ -282,6 +304,17 @@ export const EmailCenterView: React.FC = () => {
   const handleSendCompose = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!composeTo.trim()) return;
+    if (!isEmailConfigured) {
+      setIsComposeOpen(false);
+      setIsSettingsOpen(true);
+      showBanner(
+        'error',
+        'Set Up Your Email First',
+        'Please configure your own email address in "My Email & SMTP Setup" below before sending.'
+      );
+      return;
+    }
+
     setIsSending(true);
     try {
       const fullBody =
@@ -307,7 +340,7 @@ export const EmailCenterView: React.FC = () => {
       if (res.realExternalDelivery) {
         showBanner('sent', 'Email Delivered via Live SMTP', res.message);
       } else {
-        showBanner('info', 'Opened Gmail Web & Logged in Sent Mail', res.message);
+        showBanner('info', 'Opened Gmail Web & Logged in Your Sent Mail', res.message);
       }
     } finally {
       setIsSending(false);
@@ -320,8 +353,8 @@ export const EmailCenterView: React.FC = () => {
     const draft = addMailboxMessage(
       {
         folder: 'drafts',
-        fromName: config.senderName,
-        fromEmail: config.senderEmail,
+        fromName: config.senderName || currentUser?.name || 'Me',
+        fromEmail: config.senderEmail || currentUser?.email || '',
         toEmail: composeTo.trim() || '(No Recipient)',
         cc: composeCc.trim() || undefined,
         subject: composeSubject.trim() || '(Draft — No Subject)',
@@ -335,12 +368,21 @@ export const EmailCenterView: React.FC = () => {
     setIsComposeOpen(false);
     setActiveFolder('drafts');
     setSelectedMessageId(draft.id);
-    showBanner('info', 'Saved to Drafts', `"${draft.subject}" saved in Drafts.`);
+    showBanner('info', 'Saved to Your Drafts', `"${draft.subject}" saved in Drafts.`);
   };
 
   // Quick Reply from Reading Pane
   const handleSendQuickReply = async () => {
     if (!selectedMessage || !replyText.trim()) return;
+    if (!isEmailConfigured) {
+      setIsSettingsOpen(true);
+      showBanner(
+        'error',
+        'Set Up Your Email First',
+        'Please configure your own email address and password before replying.'
+      );
+      return;
+    }
     setIsReplying(true);
     try {
       const replyTarget =
@@ -376,6 +418,10 @@ export const EmailCenterView: React.FC = () => {
   // Save & Verify Domain Mail / SMTP Settings
   const handleSaveAndVerifySmtp = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!smtpForm.senderEmail.trim() || !smtpForm.senderEmail.includes('@')) {
+      showBanner('error', 'Email Required', 'Please enter your valid email address.');
+      return;
+    }
     const saved = updateSmtpConfig(smtpForm);
     setSmtpForm(saved);
     setIsVerifying(true);
@@ -403,9 +449,6 @@ export const EmailCenterView: React.FC = () => {
       ? 'bg-slate-50 border-slate-200 text-slate-900 focus:border-sky-500 focus:bg-white'
       : 'bg-slate-900 border-slate-700 text-white focus:border-sky-400'
   }`;
-
-  const isPasswordConfigured = hasRealSmtpPassword(config.password);
-  const isDomainMail = !config.senderEmail.toLowerCase().endsWith('@gmail.com');
 
   return (
     <div className="space-y-4">
@@ -449,7 +492,7 @@ export const EmailCenterView: React.FC = () => {
       )}
 
       {/* =================================================================== */}
-      {/* TOP HEADER: CONNECTED MAILBOX, DOMAIN MAIL SETUP & SYNC CONTROLS    */}
+      {/* TOP HEADER: PERSONAL MAILBOX, DOMAIN MAIL SETUP & SYNC CONTROLS     */}
       {/* =================================================================== */}
       <div className={`p-4 sm:p-5 rounded-2xl border ${cardBg}`}>
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -460,15 +503,21 @@ export const EmailCenterView: React.FC = () => {
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white">
-                  OzoStack Mail Center &amp; Unified Inbox
+                  {currentUser?.name || 'My'} — Personal Mail &amp; Inbox
                 </h1>
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30">
-                  {isDomainMail ? 'Domain Mail' : 'Gmail'}: {config.senderEmail}
-                </span>
-                {isPasswordConfigured && config.verified ? (
+                {isEmailConfigured ? (
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30">
+                    Connected: {config.senderEmail}
+                  </span>
+                ) : (
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">
+                    No Email Configured Yet
+                  </span>
+                )}
+                {isEmailConfigured && isPasswordConfigured && config.verified ? (
                   <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
                     <CheckCircle2 className="w-3 h-3" />
-                    <span>Live SMTP &amp; IMAP Verified</span>
+                    <span>Live SMTP &amp; IMAP Active</span>
                   </span>
                 ) : (
                   <button
@@ -477,14 +526,17 @@ export const EmailCenterView: React.FC = () => {
                       setSmtpForm(config);
                       setIsSettingsOpen(true);
                     }}
-                    className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 hover:bg-amber-500/25 transition-colors cursor-pointer"
+                    className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/15 text-sky-500 border border-sky-500/30 hover:bg-sky-500/25 transition-colors cursor-pointer"
                   >
-                    ⚡ Click to Add Password for Direct Background SMTP/IMAP
+                    ⚙️ Connect Your Own Email &amp; Password
                   </button>
                 )}
               </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Manage your Inbox, Sent Mail, Domain Mail (<code className="text-sky-500">@ozostack.in</code>) or Gmail (<code className="text-sky-500">ozostack@gmail.com</code>), and real-time sent/received mail notifications.
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-1.5">
+                <Lock className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                <span>
+                  <strong>100% Private Mailbox:</strong> Only you ({currentUser?.name}) can see your configured email address, inbox, and sent messages.
+                </span>
               </p>
             </div>
           </div>
@@ -498,7 +550,7 @@ export const EmailCenterView: React.FC = () => {
                   ? 'border-indigo-200 bg-indigo-50/70 text-indigo-700 hover:bg-indigo-100'
                   : 'border-indigo-500/30 bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20'
               }`}
-              title="Simulate receiving an incoming email with live notification bell alert"
+              title="Simulate receiving an incoming email in your private inbox"
             >
               <Bell className="w-3.5 h-3.5" />
               <span>Test Incoming Mail Alert</span>
@@ -515,7 +567,7 @@ export const EmailCenterView: React.FC = () => {
               }`}
             >
               <RefreshCw className={`w-3.5 h-3.5 text-sky-500 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>{isSyncing ? 'Syncing IMAP...' : 'Sync Live Inbox'}</span>
+              <span>{isSyncing ? 'Syncing IMAP...' : 'Sync My Inbox'}</span>
             </button>
 
             <button
@@ -533,12 +585,21 @@ export const EmailCenterView: React.FC = () => {
               }`}
             >
               <Settings className="w-3.5 h-3.5" />
-              <span>Domain Mail &amp; SMTP Setup</span>
+              <span>My Email &amp; SMTP Setup</span>
             </button>
 
             <button
               type="button"
               onClick={() => {
+                if (!isEmailConfigured) {
+                  setIsSettingsOpen(true);
+                  showBanner(
+                    'info',
+                    'Set Up Your Email First',
+                    'Enter your email address and password below to start sending and receiving emails.'
+                  );
+                  return;
+                }
                 setComposeTo('');
                 setComposeCc('');
                 setComposeSubject('');
@@ -554,7 +615,7 @@ export const EmailCenterView: React.FC = () => {
         </div>
 
         {/* =================================================================== */}
-        {/* COLLAPSIBLE DOMAIN MAIL (@ozostack.in) & GMAIL SMTP/IMAP DRAWER     */}
+        {/* PER-USER EMAIL & DOMAIN MAIL (@ozostack.in / GMAIL) SETUP DRAWER    */}
         {/* =================================================================== */}
         {isSettingsOpen && (
           <form
@@ -566,22 +627,24 @@ export const EmailCenterView: React.FC = () => {
               <div>
                 <h3 className="text-sm font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
                   <Globe className="w-4 h-4 text-sky-500" />
-                  <span>Connect Domain Mail (@ozostack.in) or Gmail Account</span>
+                  <span>Set Up Your Personal or Domain Email ({currentUser?.name})</span>
                 </h3>
                 <p className="text-xs text-slate-400">
-                  Select your mail provider preset below, enter your email address and password, and click <strong>Save &amp; Verify Live SMTP</strong>.
+                  Connect your own <code>@ozostack.in</code> Domain Mail or personal Gmail account. Your credentials and emails are visible only to you.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setIsSettingsOpen(false)}
-                className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-white self-end sm:self-auto"
-              >
-                Close Setup ✕
-              </button>
+              {isEmailConfigured && (
+                <button
+                  type="button"
+                  onClick={() => setIsSettingsOpen(false)}
+                  className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-white self-end sm:self-auto"
+                >
+                  Close Setup ✕
+                </button>
+              )}
             </div>
 
-            {/* Provider Presets (Domain Mail Hostinger / Titan / Zoho / Gmail) */}
+            {/* Provider Presets */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
               {MAIL_PROVIDER_PRESETS.slice(0, 4).map((preset) => (
                 <button
@@ -596,18 +659,6 @@ export const EmailCenterView: React.FC = () => {
                       imapHost: preset.imapHost,
                       imapPort: preset.imapPort,
                       encryption: preset.encryption,
-                      senderEmail:
-                        preset.id !== 'gmail' && prev.senderEmail === 'ozostack@gmail.com'
-                          ? preset.placeholderEmail
-                          : preset.id === 'gmail' && prev.senderEmail.endsWith('@ozostack.in')
-                          ? 'ozostack@gmail.com'
-                          : prev.senderEmail,
-                      username:
-                        preset.id !== 'gmail' && prev.senderEmail === 'ozostack@gmail.com'
-                          ? preset.placeholderEmail
-                          : preset.id === 'gmail' && prev.senderEmail.endsWith('@ozostack.in')
-                          ? 'ozostack@gmail.com'
-                          : prev.senderEmail,
                     }))
                   }
                   className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
@@ -618,10 +669,8 @@ export const EmailCenterView: React.FC = () => {
                       : 'border-slate-800 bg-slate-900/60 hover:bg-slate-800'
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-1">
-                    <span className="text-xs font-extrabold text-slate-900 dark:text-white">
-                      {preset.label}
-                    </span>
+                  <div className="text-xs font-extrabold text-slate-900 dark:text-white">
+                    {preset.label}
                   </div>
                   <div className="text-[10px] text-sky-500 font-bold mt-0.5">{preset.badge}</div>
                   <div className="text-[10px] text-slate-400 mt-1 font-mono">
@@ -634,11 +683,12 @@ export const EmailCenterView: React.FC = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
               <div>
                 <label className="font-bold block mb-1">
-                  Email Address (Domain or Gmail) <span className="text-rose-500">*</span>
+                  Your Email Address <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="email"
                   required
+                  autoComplete="off"
                   value={smtpForm.senderEmail}
                   onChange={(e) => {
                     const val = e.target.value;
@@ -649,7 +699,7 @@ export const EmailCenterView: React.FC = () => {
                       replyToEmail: val,
                     }));
                   }}
-                  placeholder="admin@ozostack.in or ozostack@gmail.com"
+                  placeholder="yourname@ozostack.in or yourname@gmail.com"
                   className={inputCls}
                 />
               </div>
@@ -657,7 +707,7 @@ export const EmailCenterView: React.FC = () => {
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="font-bold">
-                    Email Password / App Password <span className="text-rose-500">*</span>
+                    Your Email Password / App Password <span className="text-rose-500">*</span>
                   </label>
                   {smtpForm.host.includes('gmail.com') && (
                     <a
@@ -707,7 +757,7 @@ export const EmailCenterView: React.FC = () => {
                   <input
                     type="number"
                     value={smtpForm.port}
-                    onChange={(e) => setSmtpForm({ ...smtpForm, port: Number(e.target.value) || 587 })}
+                    onChange={(e) => setSmtpForm({ ...smtpForm, port: Number(e.target.value) || 465 })}
                     className={`${inputCls} w-20`}
                   />
                 </div>
@@ -754,7 +804,7 @@ export const EmailCenterView: React.FC = () => {
 
             <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
               <p className="text-[11px] text-slate-400">
-                💡 <strong>Domain Mail Tip:</strong> Your domain <code>ozostack.in</code> is on Hostinger DNS — if you created an email like <code>info@ozostack.in</code> on Hostinger, select <strong>Domain Mail — Hostinger</strong> and enter your regular email password!
+                🔒 Your email configuration is linked strictly to your user ID (<strong>{currentUser?.email}</strong>).
               </p>
               <button
                 type="submit"
@@ -763,7 +813,7 @@ export const EmailCenterView: React.FC = () => {
               >
                 <ShieldCheck className="w-4 h-4" />
                 <span>
-                  {isVerifying ? 'Verifying Live SMTP...' : 'Save & Verify Live SMTP Connection'}
+                  {isVerifying ? 'Verifying Live SMTP...' : 'Save & Connect My Email'}
                 </span>
               </button>
             </div>
@@ -780,7 +830,13 @@ export const EmailCenterView: React.FC = () => {
           <div className="space-y-1.5">
             <button
               type="button"
-              onClick={() => setIsComposeOpen(true)}
+              onClick={() => {
+                if (!isEmailConfigured) {
+                  setIsSettingsOpen(true);
+                  return;
+                }
+                setIsComposeOpen(true);
+              }}
               className="w-full flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-sky-500 hover:bg-sky-600 text-white text-xs font-extrabold shadow-md shadow-sky-500/20 mb-3 transition-all cursor-pointer"
             >
               <Plus className="w-4 h-4" />
@@ -790,7 +846,7 @@ export const EmailCenterView: React.FC = () => {
             {[
               {
                 id: 'inbox',
-                label: 'Inbox',
+                label: 'My Inbox',
                 icon: Inbox,
                 badge: counts.inboxUnread > 0 ? counts.inboxUnread : counts.inboxTotal,
                 highlight: counts.inboxUnread > 0,
@@ -837,19 +893,23 @@ export const EmailCenterView: React.FC = () => {
             })}
           </div>
 
-          <div className="pt-4 mt-4 border-t border-slate-100 dark:border-slate-800 space-y-2 text-[11px]">
+          <div className="pt-4 mt-4 border-t border-slate-100 dark:border-slate-800 space-y-1.5 text-[11px]">
             <div className="font-bold text-slate-400 uppercase tracking-wider text-[10px]">
-              Active Mail Server
+              My Connected Mail
             </div>
             <div className="font-bold text-slate-800 dark:text-slate-200 truncate">
-              {config.senderEmail}
+              {config.senderEmail || 'Not configured yet'}
             </div>
-            <div className="text-[10px] text-slate-400 font-mono truncate">
-              SMTP: {config.host}:{config.port}
-            </div>
-            <div className="text-[10px] text-slate-400 font-mono truncate">
-              IMAP: {config.imapHost}:{config.imapPort}
-            </div>
+            {isEmailConfigured && (
+              <>
+                <div className="text-[10px] text-slate-400 font-mono truncate">
+                  SMTP: {config.host}:{config.port}
+                </div>
+                <div className="text-[10px] text-slate-400 font-mono truncate">
+                  IMAP: {config.imapHost}:{config.imapPort}
+                </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -892,7 +952,7 @@ export const EmailCenterView: React.FC = () => {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search emails by sender, subject..."
+                placeholder="Search your emails..."
                 className={`${inputCls} pl-8 py-1.5`}
               />
             </div>
@@ -902,9 +962,13 @@ export const EmailCenterView: React.FC = () => {
             {filteredMessages.length === 0 ? (
               <div className="py-16 px-4 text-center space-y-2">
                 <Mail className="w-8 h-8 text-slate-400 mx-auto opacity-50" />
-                <p className="text-xs font-bold text-slate-500">No emails in {activeFolder}</p>
+                <p className="text-xs font-bold text-slate-500">
+                  Your {activeFolder} folder is empty
+                </p>
                 <p className="text-[11px] text-slate-400">
-                  Click "Sync Live Inbox" to fetch incoming emails or "Compose Email" to send a message.
+                  {isEmailConfigured
+                    ? 'Click "Sync My Inbox" to fetch incoming emails or "Compose Email" to send a message.'
+                    : 'Set up your personal or domain email above to start sending and receiving emails.'}
                 </p>
               </div>
             ) : (
@@ -1009,7 +1073,9 @@ export const EmailCenterView: React.FC = () => {
                 Select an email to read or reply
               </h3>
               <p className="text-xs text-slate-400 max-w-xs">
-                Choose any message from your Inbox or Sent folder, or click "Compose Email" to send a new message.
+                {isEmailConfigured
+                  ? 'Choose any message from your Inbox or Sent folder, or click "Compose Email" to send a new message.'
+                  : 'Connect your personal or @ozostack.in domain email above to start managing your inbox.'}
               </p>
             </div>
           ) : (
@@ -1094,7 +1160,7 @@ export const EmailCenterView: React.FC = () => {
                   <div className="flex items-center justify-between gap-3 text-xs">
                     <div className="flex items-center gap-3">
                       <div className="w-9 h-9 rounded-xl bg-sky-500/15 text-sky-500 font-extrabold flex items-center justify-center uppercase">
-                        {(selectedMessage.fromName || selectedMessage.fromEmail)[0]}
+                        {(selectedMessage.fromName || selectedMessage.fromEmail || 'U')[0]}
                       </div>
                       <div>
                         <div className="font-bold text-slate-900 dark:text-white">
@@ -1154,7 +1220,10 @@ export const EmailCenterView: React.FC = () => {
                     </span>
                   </span>
                   <span className="text-[11px] text-slate-400">
-                    Sending as <strong className="text-sky-500">{config.senderEmail}</strong>
+                    Sending as{' '}
+                    <strong className="text-sky-500">
+                      {config.senderEmail || 'Setup Email Required'}
+                    </strong>
                   </span>
                 </div>
 
@@ -1199,7 +1268,10 @@ export const EmailCenterView: React.FC = () => {
                     Compose Outbound Email
                   </h3>
                   <p className="text-[11px] text-slate-400">
-                    From: <strong className="text-sky-500">{config.senderName} &lt;{config.senderEmail}&gt;</strong>
+                    From:{' '}
+                    <strong className="text-sky-500">
+                      {config.senderName || currentUser?.name} &lt;{config.senderEmail}&gt;
+                    </strong>
                   </p>
                 </div>
               </div>
@@ -1223,7 +1295,7 @@ export const EmailCenterView: React.FC = () => {
                     required
                     value={composeTo}
                     onChange={(e) => setComposeTo(e.target.value)}
-                    placeholder="client@company.com or work.ozostack@gmail.com"
+                    placeholder="recipient@company.com"
                     className={inputCls}
                   />
                 </div>

@@ -99,9 +99,8 @@ We have reserved time with our technical directors this week. Would Thursday at 
 
 Best regards,
 
-Sayed
-Founder & CEO, OZO STACK
-work.ozostack@gmail.com | ozostack.ai`,
+${smtpConfig.senderName || 'OZO STACK'}
+${smtpConfig.senderEmail ? `${smtpConfig.senderEmail} | ` : ''}ozostack.in`,
       };
     }
 
@@ -545,7 +544,13 @@ OZO STACK`,
                 className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-sky-600 hover:bg-sky-500 disabled:opacity-50 rounded-lg shadow-sm shadow-sky-600/25 active:scale-95 transition-all"
               >
                 <Mail className="w-3.5 h-3.5" />
-                <span>{isSending ? 'Sending...' : `Send Direct Email (${smtpConfig.senderEmail})`}</span>
+                <span>
+                  {isSending
+                    ? 'Sending...'
+                    : smtpConfig.senderEmail
+                    ? `Send Direct Email (${smtpConfig.senderEmail})`
+                    : 'Send Direct Email'}
+                </span>
               </button>
             ) : (
               <button

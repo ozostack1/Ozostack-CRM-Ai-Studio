@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Mail,
   Server,
@@ -11,10 +11,10 @@ import {
   Trash2,
   RefreshCw,
   ShieldCheck,
-  Sparkles,
   ExternalLink,
   Inbox,
   Globe,
+  Lock,
 } from 'lucide-react';
 import {
   useSmtpConfig,
@@ -25,9 +25,9 @@ import {
   openGmailDirectCompose,
   clearSentEmailsLog,
   hasRealSmtpPassword,
-  DEFAULT_SMTP_CONFIG,
 } from '../../data/emailService';
 import { useTheme } from '../../context/ThemeContext';
+import { useAuth } from '../../context/AuthContext';
 
 interface SmtpSettingsSectionProps {
   onNotify: (msg: string) => void;
@@ -35,15 +35,20 @@ interface SmtpSettingsSectionProps {
 
 export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNotify }) => {
   const { theme, setActiveNav } = useTheme();
+  const { currentUser } = useAuth();
   const isLight = theme === 'white-sky';
   const { config, sentLog, updateSmtpConfig } = useSmtpConfig();
 
   const [form, setForm] = useState<SmtpConfig>(config);
   const [showPassword, setShowPassword] = useState(false);
-  const [testRecipient, setTestRecipient] = useState('work.ozostack@gmail.com');
+  const [testRecipient, setTestRecipient] = useState('');
   const [isTesting, setIsTesting] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
   const [testFeedback, setTestFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    setForm(config);
+  }, [config.ownerUserId, config.senderEmail]);
 
   const cardCls = isLight
     ? 'bg-white border-sky-100/90 shadow-xs'
@@ -55,26 +60,15 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
   }`;
 
   const handleSelectProvider = (preset: (typeof MAIL_PROVIDER_PRESETS)[number]) => {
-    setForm((prev) => {
-      const nextEmail =
-        preset.id !== 'gmail' && prev.senderEmail === 'ozostack@gmail.com'
-          ? preset.placeholderEmail
-          : preset.id === 'gmail' && prev.senderEmail.endsWith('@ozostack.in')
-          ? 'ozostack@gmail.com'
-          : prev.senderEmail;
-      return {
-        ...prev,
-        provider: preset.id,
-        host: preset.host,
-        port: preset.port,
-        imapHost: preset.imapHost,
-        imapPort: preset.imapPort,
-        encryption: preset.encryption,
-        senderEmail: nextEmail,
-        username: nextEmail,
-        replyToEmail: nextEmail,
-      };
-    });
+    setForm((prev) => ({
+      ...prev,
+      provider: preset.id,
+      host: preset.host,
+      port: preset.port,
+      imapHost: preset.imapHost,
+      imapPort: preset.imapPort,
+      encryption: preset.encryption,
+    }));
   };
 
   const handleSenderEmailChange = (newEmail: string) => {
@@ -93,7 +87,7 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.senderEmail.trim() || !form.senderEmail.includes('@')) {
-      onNotify('Please enter a valid Sender Email address.');
+      onNotify('Please enter your valid email address.');
       return;
     }
     const saved = updateSmtpConfig(form);
@@ -112,16 +106,20 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
     } else {
       setTestFeedback({
         ok: false,
-        text: `Saved ${saved.senderEmail}. Enter your @ozostack.in Domain Mail password or 16-digit Gmail App Password in the Password field below so emails deliver directly to external inboxes.`,
+        text: `Saved ${saved.senderEmail}. Enter your email password below and click "Save & Verify Live SMTP Settings" to enable direct background email sending & inbox sync.`,
       });
-      onNotify(`Saved ${saved.senderEmail}. Add password to enable live external SMTP.`);
+      onNotify(`Saved ${saved.senderEmail}. Add password to verify live SMTP.`);
     }
   };
 
   const handleSendTestEmail = async () => {
-    const target = testRecipient.trim() || 'work.ozostack@gmail.com';
+    const target = testRecipient.trim() || form.senderEmail.trim();
     if (!target || !target.includes('@')) {
       onNotify('Enter a valid recipient email for the test.');
+      return;
+    }
+    if (!form.senderEmail.trim() || !form.senderEmail.includes('@')) {
+      onNotify('Please configure your own sender email address first.');
       return;
     }
 
@@ -135,7 +133,7 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
       const res = await sendDirectEmail({
         to: target,
         subject: `OzoStack CRM — Live SMTP Delivery Test (${saved.senderEmail})`,
-        body: `Hello,\n\nThis is a live test email sent from your OzoStack CRM workspace.\n\nConnected Sender: ${saved.senderName} <${saved.senderEmail}>\nSMTP Server: ${saved.host}:${saved.port} (${saved.encryption})\nIMAP Server: ${saved.imapHost}:${saved.imapPort}\n\n${saved.signature}`,
+        body: `Hello,\n\nThis is a live test email sent from your personal OzoStack CRM mailbox.\n\nConnected Sender: ${saved.senderName} <${saved.senderEmail}>\nSMTP Server: ${saved.host}:${saved.port} (${saved.encryption})\nIMAP Server: ${saved.imapHost}:${saved.imapPort}\n\n${saved.signature}`,
         recipientName: 'SMTP Verification',
         allowGmailFallback: false,
       });
@@ -151,7 +149,7 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
           ok: false,
           text:
             res.error ||
-            'To send directly in the background without opening Gmail, enter your @ozostack.in Domain Mail password or 16-digit Gmail App Password.',
+            'Please enter your real @ozostack.in Domain Mail password or 16-digit Gmail App Password to send via live background SMTP.',
         });
       }
     } finally {
@@ -162,6 +160,7 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
   const activePreset =
     MAIL_PROVIDER_PRESETS.find((p) => p.id === form.provider) || MAIL_PROVIDER_PRESETS[0];
   const isPasswordSet = hasRealSmtpPassword(config.password);
+  const isEmailConfigured = Boolean(config.senderEmail && config.senderEmail.includes('@'));
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -176,23 +175,26 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
           <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white">
-                Domain Mail (@ozostack.in) &amp; Gmail SMTP / IMAP Configuration
+                My Personal &amp; Domain Mail Setup ({currentUser?.name || 'My Account'})
               </h2>
-              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30">
-                Active Email: {config.senderEmail}
-              </span>
-              {isPasswordSet && config.verified ? (
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
-                  Live External SMTP &amp; IMAP Verified ✅
+              {isEmailConfigured ? (
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30">
+                  My Email: {config.senderEmail}
                 </span>
               ) : (
                 <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">
-                  Password Required for Live External SMTP
+                  Not Configured Yet — Set Up Your Email Below
+                </span>
+              )}
+              {isEmailConfigured && isPasswordSet && config.verified && (
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+                  Live SMTP &amp; IMAP Verified ✅
                 </span>
               )}
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed max-w-3xl">
-              Connect either your <strong>Domain Mail</strong> (e.g. <code>admin@ozostack.in</code> / <code>info@ozostack.in</code> on Hostinger or Titan using your normal email password) OR <strong>Gmail</strong> (<code>ozostack@gmail.com</code> using a 16-digit Google App Password).
+              <Lock className="w-3.5 h-3.5 inline mr-1 text-emerald-500" />
+              <strong>Strict Per-User Privacy:</strong> Your email credentials, inbox, and sent messages are 100% isolated to your user account (<strong>{currentUser?.name}</strong>). No other user can view your email ID or messages.
             </p>
           </div>
         </div>
@@ -204,7 +206,7 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
             className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-700 text-white text-xs font-extrabold shadow-md shadow-sky-500/20 transition-all cursor-pointer"
           >
             <Inbox className="w-4 h-4" />
-            <span>Open Mail Center &amp; Inbox &rarr;</span>
+            <span>Open My Mail Inbox &rarr;</span>
           </button>
         </div>
       </div>
@@ -220,10 +222,10 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
             <div>
               <h3 className="text-sm font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
                 <Globe className="w-4 h-4 text-sky-500" />
-                <span>Select Domain Mail (@ozostack.in) or Gmail Provider</span>
+                <span>Connect Your Domain Mail (@ozostack.in) or Personal Email</span>
               </h3>
               <p className="text-[11px] text-slate-400">
-                Your domain <code>ozostack.in</code> is on Hostinger DNS — Hostinger &amp; Titan Domain Mail work directly with your normal email password!
+                Choose your mail provider preset, enter your own email address and password, and click Save &amp; Verify.
               </p>
             </div>
             <Server className="w-4 h-4 text-sky-500" />
@@ -256,7 +258,7 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
             <div>
               <label className="font-bold block mb-1 text-slate-700 dark:text-slate-200">
-                Connected Email Address (From) <span className="text-rose-500">*</span>
+                Your Email Address (From) <span className="text-rose-500">*</span>
               </label>
               <input
                 type="email"
@@ -268,24 +270,24 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
                 className={inputCls}
               />
               <span className="text-[10px] text-slate-400 mt-0.5 block">
-                Use <code>admin@ozostack.in</code> / <code>info@ozostack.in</code> or <code>ozostack@gmail.com</code>
+                Enter your own work or domain email address
               </span>
             </div>
 
             <div>
               <label className="font-bold block mb-1 text-slate-700 dark:text-slate-200">
-                Sender Display Name
+                Your Display Name
               </label>
               <input
                 type="text"
                 autoComplete="off"
                 value={form.senderName}
                 onChange={(e) => setForm({ ...form, senderName: e.target.value })}
-                placeholder="OzoStack CRM"
+                placeholder={currentUser?.name || 'Your Name'}
                 className={inputCls}
               />
               <span className="text-[10px] text-slate-400 mt-0.5 block">
-                Shown in recipient inbox: {form.senderName || 'OzoStack CRM'} &lt;{form.senderEmail}&gt;
+                Shown in recipient inbox: {form.senderName || currentUser?.name} &lt;{form.senderEmail || 'you@domain.com'}&gt;
               </span>
             </div>
           </div>
@@ -300,7 +302,7 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
                 autoComplete="off"
                 value={form.username}
                 onChange={(e) => setForm({ ...form, username: e.target.value })}
-                placeholder={form.senderEmail}
+                placeholder={form.senderEmail || activePreset.placeholderEmail}
                 className={inputCls}
               />
             </div>
@@ -308,7 +310,7 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="font-bold text-slate-900 dark:text-white">
-                  Email Password / App Password <span className="text-rose-500">*</span>
+                  Your Email Password / App Password <span className="text-rose-500">*</span>
                 </label>
                 {form.host.includes('gmail.com') && (
                   <a
@@ -365,7 +367,7 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
                 type="number"
                 required
                 value={form.port}
-                onChange={(e) => setForm({ ...form, port: Number(e.target.value) || 587 })}
+                onChange={(e) => setForm({ ...form, port: Number(e.target.value) || 465 })}
                 className={inputCls}
               />
             </div>
@@ -412,7 +414,7 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
           <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-              <span>Synced with your cloud database across all sessions</span>
+              <span>Private to {currentUser?.name || 'your account'}</span>
             </div>
 
             <button
@@ -422,7 +424,7 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
             >
               <Save className="w-3.5 h-3.5" />
               <span>
-                {isVerifying ? 'Verifying SMTP Server...' : 'Save & Verify Live SMTP Settings'}
+                {isVerifying ? 'Verifying SMTP Server...' : 'Save & Verify My Mail Settings'}
               </span>
             </button>
           </div>
@@ -436,7 +438,8 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
               <span>Test Real External Inbox Delivery</span>
             </h3>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Send a real email from <strong className="text-sky-500">{form.senderEmail}</strong> to your actual inbox (e.g. <code>work.ozostack@gmail.com</code>).
+              Send a real test email from{' '}
+              <strong className="text-sky-500">{form.senderEmail || 'your configured email'}</strong> to any inbox.
             </p>
 
             <div className="space-y-2 text-xs">
@@ -445,13 +448,13 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
                 type="email"
                 value={testRecipient}
                 onChange={(e) => setTestRecipient(e.target.value)}
-                placeholder="work.ozostack@gmail.com"
+                placeholder="recipient@example.com"
                 className={inputCls}
               />
               <button
                 type="button"
                 onClick={handleSendTestEmail}
-                disabled={isTesting}
+                disabled={isTesting || !form.senderEmail.trim()}
                 className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-extrabold shadow-md shadow-emerald-600/20 transition-all cursor-pointer"
               >
                 {isTesting ? (
@@ -472,8 +475,8 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
                 onClick={() =>
                   openGmailDirectCompose({
                     from: form.senderEmail,
-                    to: testRecipient.trim() || 'work.ozostack@gmail.com',
-                    subject: `OzoStack CRM — Direct Email from ${form.senderEmail}`,
+                    to: testRecipient.trim() || form.senderEmail.trim(),
+                    subject: `OzoStack CRM — Direct Email from ${form.senderEmail || currentUser?.name}`,
                     body: `Hello,\n\nTesting direct email delivery from OzoStack CRM.\n\n${form.signature}`,
                   })
                 }
@@ -485,18 +488,18 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
             </div>
           </div>
 
-          {/* Recent Outbound Emails Log */}
+          {/* Recent Outbound Emails Log (Scoped strictly to current user) */}
           <div className={`p-5 rounded-2xl border space-y-3 ${cardCls}`}>
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-400">
-                Recent Outbound Emails ({sentLog.length})
+                My Recent Outbound Emails ({sentLog.length})
               </h3>
               {sentLog.length > 0 && (
                 <button
                   type="button"
                   onClick={() => {
                     clearSentEmailsLog();
-                    onNotify('Cleared outbound email log.');
+                    onNotify('Cleared your outbound email log.');
                   }}
                   className="text-[11px] text-rose-500 hover:underline flex items-center gap-1 font-semibold"
                 >
@@ -508,7 +511,7 @@ export const SmtpSettingsSection: React.FC<SmtpSettingsSectionProps> = ({ onNoti
 
             {sentLog.length === 0 ? (
               <p className="text-xs text-slate-400 py-4 text-center">
-                No outbound emails sent yet.
+                You have not sent any outbound emails yet.
               </p>
             ) : (
               <div className="space-y-2 max-h-56 overflow-y-auto pr-1">

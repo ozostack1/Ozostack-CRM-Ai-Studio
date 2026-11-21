@@ -7,6 +7,9 @@ const EXCLUDED_KEYS = new Set([
   'ozostack_notifications_v1',
   'ozostack_notifications_v2',
   'ozostack_notifications_v3',
+  'ozostack_smtp_config_v1',
+  'ozostack_mailbox_messages_v1',
+  'ozostack_sent_emails_v1',
 ]);
 
 function isSyncedKey(key: string): boolean {

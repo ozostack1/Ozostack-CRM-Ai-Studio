@@ -50,6 +50,9 @@ try {
     window.localStorage.removeItem('ozostack_content_items_v1');
     window.localStorage.removeItem('ozostack_notifications_v2');
     window.localStorage.removeItem('ozostack_notifications_v1');
+    window.localStorage.removeItem('ozostack_smtp_config_v1');
+    window.localStorage.removeItem('ozostack_mailbox_messages_v1');
+    window.localStorage.removeItem('ozostack_sent_emails_v1');
     const savedDate = window.localStorage.getItem('ozostack_selected_date');
     if (savedDate === '2025-05-20') {
       window.localStorage.removeItem('ozostack_selected_date');
