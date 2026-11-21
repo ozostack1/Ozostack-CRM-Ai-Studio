@@ -1,11 +1,20 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MongoClient } from 'mongodb';
 import nodemailer from 'nodemailer';
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
+import {
+  makeWASocket,
+  useMultiFileAuthState,
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+} from '@whiskeysockets/baileys';
+import QRCode from 'qrcode';
+import pino from 'pino';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -169,6 +178,201 @@ function escapeHtml(str) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+// ============================================================================
+// Per-User Isolated WhatsApp Session Manager (Baileys Multi-Device QR + Meta API)
+// ============================================================================
+const waSessions = new Map();
+
+function sanitizeWaUserId(userId) {
+  const clean = String(userId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+  return clean || 'anonymous';
+}
+
+function getOrCreateWaSessionEntry(userId) {
+  const safeId = sanitizeWaUserId(userId);
+  if (!waSessions.has(safeId)) {
+    waSessions.set(safeId, {
+      userId: safeId,
+      authDir: path.join(os.tmpdir(), `ozostack_wa_auth_${safeId}`),
+      sock: null,
+      status: 'disconnected',
+      qrDataUrl: '',
+      phoneNumber: '',
+      pushName: '',
+      lastError: '',
+      incomingMessages: [],
+      waiters: [],
+      starting: false,
+    });
+  }
+  return waSessions.get(safeId);
+}
+
+function resolveWaWaiters(session) {
+  const list = session.waiters.splice(0, session.waiters.length);
+  for (const fn of list) {
+    try {
+      fn();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+async function startBaileysSocket(session) {
+  if (session.starting) return;
+  session.starting = true;
+  try {
+    try {
+      session.sock?.end?.();
+    } catch {
+      /* ignore */
+    }
+    session.sock = null;
+
+    fs.mkdirSync(session.authDir, { recursive: true });
+    const { state, saveCreds } = await useMultiFileAuthState(session.authDir);
+
+    let version = [2, 3000, 1017531287];
+    try {
+      const latest = await fetchLatestBaileysVersion();
+      if (latest?.version) version = latest.version;
+    } catch {
+      /* fallback default */
+    }
+
+    const sock = makeWASocket({
+      version,
+      auth: state,
+      printQRInTerminal: false,
+      logger: pino({ level: 'silent' }),
+      browser: ['OzoStack CRM', 'Chrome', '120.0.0'],
+      syncFullHistory: false,
+      markOnlineOnConnect: false,
+    });
+
+    session.sock = sock;
+    if (session.status !== 'connected') {
+      session.status = 'qr_pending';
+    }
+
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr) {
+        try {
+          session.qrDataUrl = await QRCode.toDataURL(qr, { width: 320, margin: 1 });
+          session.status = 'qr_pending';
+          session.lastError = '';
+          resolveWaWaiters(session);
+        } catch (qrErr) {
+          session.lastError = qrErr?.message || 'Failed to generate QR image';
+        }
+      }
+
+      if (connection === 'open') {
+        session.status = 'connected';
+        session.qrDataUrl = '';
+        session.lastError = '';
+        const rawJid = sock.user?.id || '';
+        const digits = rawJid.split(':')[0].split('@')[0].replace(/[^0-9]/g, '');
+        session.phoneNumber = digits ? `+${digits}` : session.phoneNumber || 'Linked WhatsApp';
+        session.pushName = sock.user?.name || session.pushName || 'WhatsApp Linked';
+        resolveWaWaiters(session);
+      }
+
+      if (connection === 'close') {
+        const statusCode =
+          lastDisconnect?.error?.output?.statusCode ||
+          lastDisconnect?.error?.statusCode ||
+          0;
+        const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+        const isRestartRequired =
+          statusCode === DisconnectReason.restartRequired || statusCode === 515;
+
+        session.sock = null;
+
+        if (isLoggedOut) {
+          session.status = 'disconnected';
+          session.qrDataUrl = '';
+          session.phoneNumber = '';
+          session.pushName = '';
+          try {
+            fs.rmSync(session.authDir, { recursive: true, force: true });
+          } catch {
+            /* ignore */
+          }
+          resolveWaWaiters(session);
+        } else if (isRestartRequired) {
+          // Immediately restart stream after QR scan pairing
+          setTimeout(() => {
+            startBaileysSocket(session).catch(() => {});
+          }, 300);
+        } else {
+          session.status = 'disconnected';
+          resolveWaWaiters(session);
+        }
+      }
+    });
+
+    sock.ev.on('messages.upsert', (m) => {
+      if (!m || !Array.isArray(m.messages)) return;
+      for (const msg of m.messages) {
+        try {
+          if (!msg.message) continue;
+          const remoteJid = msg.key?.remoteJid || '';
+          if (!remoteJid || remoteJid === 'status@broadcast' || remoteJid.endsWith('@g.us')) {
+            continue;
+          }
+          if (msg.key?.fromMe) continue;
+
+          const digits = remoteJid.split('@')[0].replace(/[^0-9]/g, '');
+          if (!digits) continue;
+
+          const text =
+            msg.message.conversation ||
+            msg.message.extendedTextMessage?.text ||
+            msg.message.imageMessage?.caption ||
+            msg.message.videoMessage?.caption ||
+            msg.message.documentMessage?.caption ||
+            '';
+          if (!text) continue;
+
+          const ts = msg.messageTimestamp
+            ? new Date(Number(msg.messageTimestamp) * 1000).toISOString()
+            : new Date().toISOString();
+
+          session.incomingMessages.push({
+            id: `wa-live-${msg.key?.id || Date.now()}`,
+            phone: `+${digits}`,
+            contactPhone: `+${digits}`,
+            pushName: msg.pushName || `+${digits}`,
+            contactName: msg.pushName || `+${digits}`,
+            fromMe: false,
+            direction: 'inbound',
+            text,
+            body: text,
+            timestamp: ts,
+            status: 'received',
+            read: false,
+            via: 'qr_session',
+          });
+
+          if (session.incomingMessages.length > 100) {
+            session.incomingMessages.splice(0, session.incomingMessages.length - 100);
+          }
+        } catch {
+          /* ignore malformed incoming message */
+        }
+      }
+    });
+  } finally {
+    session.starting = false;
+  }
 }
 
 const MIME_TYPES = {
@@ -522,6 +726,271 @@ const server = http.createServer(async (req, res) => {
           error: `IMAP Sync failed on ${imapHost}:${imapPort} — ${imapErr?.message || 'Unable to connect'}`,
         });
       }
+      return;
+    }
+
+    // ========================================================================
+    // Per-User WhatsApp Endpoints (QR Multi-Device Session & Meta Cloud API)
+    // ========================================================================
+
+    // 1. Start or fetch per-user WhatsApp QR session
+    if (pathname === '/api/whatsapp/connect' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const userId = body.userId;
+      if (!userId) {
+        sendJson(res, 400, { ok: false, error: 'userId is required for isolated WhatsApp session.' });
+        return;
+      }
+
+      const session = getOrCreateWaSessionEntry(userId);
+
+      // If user asks for a fresh QR and isn't connected, reset stale socket
+      if (session.status !== 'connected' && (!session.sock || !session.qrDataUrl)) {
+        try {
+          fs.rmSync(session.authDir, { recursive: true, force: true });
+        } catch {
+          /* ignore */
+        }
+        session.qrDataUrl = '';
+        await startBaileysSocket(session);
+      }
+
+      // Wait up to 6.5 seconds for QR generation or connection open
+      if (session.status !== 'connected' && !session.qrDataUrl) {
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 6500);
+          session.waiters.push(() => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
+      }
+
+      sendJson(res, 200, {
+        ok: true,
+        status: session.status,
+        qrDataUrl: session.qrDataUrl,
+        phoneNumber: session.phoneNumber,
+        pushName: session.pushName,
+        error: session.lastError || undefined,
+      });
+      return;
+    }
+
+    // 2. Poll per-user WhatsApp session status & drain live incoming messages
+    if (pathname === '/api/whatsapp/status' && req.method === 'GET') {
+      const userId = parsedUrl.searchParams.get('userId');
+      if (!userId) {
+        sendJson(res, 200, { ok: false, status: 'disconnected', incomingMessages: [] });
+        return;
+      }
+
+      const session = getOrCreateWaSessionEntry(userId);
+      const incomingMessages = session.incomingMessages.splice(0, session.incomingMessages.length);
+
+      sendJson(res, 200, {
+        ok: true,
+        status: session.status,
+        qrDataUrl: session.qrDataUrl,
+        phoneNumber: session.phoneNumber,
+        pushName: session.pushName,
+        incomingMessages,
+      });
+      return;
+    }
+
+    // 3. Send outbound WhatsApp message via user's QR session or Meta Cloud API
+    if (pathname === '/api/whatsapp/send' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const userId = body.userId;
+      const digits = String(body.toPhone || body.to || '').replace(/[^0-9]/g, '');
+      const text = String(body.text || '').trim();
+
+      if (!digits || !text) {
+        sendJson(res, 400, { ok: false, error: 'Recipient phone number and message text are required.' });
+        return;
+      }
+
+      const session = userId ? getOrCreateWaSessionEntry(userId) : null;
+
+      // Priority A: Active Baileys QR session for this user
+      if (session && session.status === 'connected' && session.sock) {
+        try {
+          const jid = `${digits}@s.whatsapp.net`;
+          const sent = await session.sock.sendMessage(jid, { text });
+          sendJson(res, 200, {
+            ok: true,
+            realDelivered: true,
+            via: 'qr_session',
+            messageId: sent?.key?.id || `wa-qr-${Date.now()}`,
+          });
+          return;
+        } catch (sendErr) {
+          sendJson(res, 200, {
+            ok: false,
+            realDelivered: false,
+            via: 'qr_session',
+            error: `WhatsApp QR session send error: ${sendErr?.message || 'Failed to deliver'}`,
+          });
+          return;
+        }
+      }
+
+      // Priority B: Official Meta WhatsApp Cloud API (if configured by this user)
+      const meta = body.metaConfig;
+      if (meta && meta.phoneNumberId && meta.accessToken) {
+        try {
+          const graphRes = await fetch(
+            `https://graph.facebook.com/v20.0/${encodeURIComponent(String(meta.phoneNumberId).trim())}/messages`,
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${String(meta.accessToken).trim()}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                messaging_product: 'whatsapp',
+                recipient_type: 'individual',
+                to: digits,
+                type: 'text',
+                text: { preview_url: false, body: text },
+              }),
+            }
+          );
+          const graphData = await graphRes.json().catch(() => ({}));
+          if (graphRes.ok && graphData?.messages?.[0]?.id) {
+            sendJson(res, 200, {
+              ok: true,
+              realDelivered: true,
+              via: 'meta_cloud_api',
+              messageId: graphData.messages[0].id,
+            });
+            return;
+          }
+          sendJson(res, 200, {
+            ok: false,
+            realDelivered: false,
+            via: 'meta_cloud_api',
+            error:
+              graphData?.error?.message ||
+              'Meta WhatsApp Cloud API rejected the message. Verify your Phone Number ID and Access Token.',
+          });
+          return;
+        } catch (metaErr) {
+          sendJson(res, 200, {
+            ok: false,
+            realDelivered: false,
+            via: 'meta_cloud_api',
+            error: `Meta Cloud API network error: ${metaErr?.message || 'Unknown error'}`,
+          });
+          return;
+        }
+      }
+
+      sendJson(res, 200, {
+        ok: false,
+        realDelivered: false,
+        via: 'wa_web_link',
+        error: 'WhatsApp is not linked yet. Scan your WhatsApp QR Code or connect Meta Cloud API.',
+      });
+      return;
+    }
+
+    // 4. Disconnect & wipe per-user WhatsApp session
+    if (pathname === '/api/whatsapp/disconnect' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const userId = body.userId;
+      if (userId) {
+        const session = getOrCreateWaSessionEntry(userId);
+        try {
+          await session.sock?.logout?.();
+        } catch {
+          /* ignore */
+        }
+        try {
+          session.sock?.end?.();
+        } catch {
+          /* ignore */
+        }
+        session.sock = null;
+        session.status = 'disconnected';
+        session.qrDataUrl = '';
+        session.phoneNumber = '';
+        session.pushName = '';
+        session.incomingMessages = [];
+        try {
+          fs.rmSync(session.authDir, { recursive: true, force: true });
+        } catch {
+          /* ignore */
+        }
+      }
+      sendJson(res, 200, { ok: true, status: 'disconnected' });
+      return;
+    }
+
+    // 5. Official Meta WhatsApp Cloud API Webhook Verification & Inbound Receiver
+    if (pathname === '/api/whatsapp/webhook' && req.method === 'GET') {
+      const mode = parsedUrl.searchParams.get('hub.mode');
+      const challenge = parsedUrl.searchParams.get('hub.challenge') || '';
+      if (mode === 'subscribe' && challenge) {
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end(challenge);
+        return;
+      }
+      sendJson(res, 200, { ok: true, webhook: 'ozostack-whatsapp-webhook-ready' });
+      return;
+    }
+
+    if (pathname === '/api/whatsapp/webhook' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const targetUserId = parsedUrl.searchParams.get('userId');
+      try {
+        const entries = Array.isArray(body?.entry) ? body.entry : [];
+        for (const entry of entries) {
+          const changes = Array.isArray(entry?.changes) ? entry.changes : [];
+          for (const change of changes) {
+            const val = change?.value;
+            const contacts = Array.isArray(val?.contacts) ? val.contacts : [];
+            const messages = Array.isArray(val?.messages) ? val.messages : [];
+            for (const m of messages) {
+              const fromDigits = String(m?.from || '').replace(/[^0-9]/g, '');
+              const text = m?.text?.body || m?.button?.text || '';
+              if (!fromDigits || !text) continue;
+              const profileName =
+                contacts.find((c) => String(c?.wa_id || '').replace(/[^0-9]/g, '') === fromDigits)
+                  ?.profile?.name || `+${fromDigits}`;
+              const payloadMsg = {
+                id: `wa-meta-${m.id || Date.now()}`,
+                phone: `+${fromDigits}`,
+                contactPhone: `+${fromDigits}`,
+                pushName: profileName,
+                contactName: profileName,
+                fromMe: false,
+                direction: 'inbound',
+                text,
+                body: text,
+                timestamp: m.timestamp
+                  ? new Date(Number(m.timestamp) * 1000).toISOString()
+                  : new Date().toISOString(),
+                status: 'received',
+                read: false,
+                via: 'meta_cloud_api',
+              };
+              if (targetUserId) {
+                const s = getOrCreateWaSessionEntry(targetUserId);
+                s.incomingMessages.push(payloadMsg);
+              } else {
+                for (const s of waSessions.values()) {
+                  s.incomingMessages.push(payloadMsg);
+                }
+              }
+            }
+          }
+        }
+      } catch {
+        /* ignore malformed webhook payload */
+      }
+      sendJson(res, 200, { ok: true });
       return;
     }
 

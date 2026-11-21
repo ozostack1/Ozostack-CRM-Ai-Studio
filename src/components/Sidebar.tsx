@@ -36,6 +36,7 @@ import {
   X,
   Sparkles,
   ListTodo,
+  MessageSquare,
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -113,6 +114,7 @@ const NAV_SECTIONS: NavSection[] = [
         icon: Megaphone,
         items: [
           { id: 'Email', label: 'Email & Inbox', icon: Mail },
+          { id: 'WhatsApp', label: 'WhatsApp Messenger', icon: MessageSquare },
           { id: 'Templates', label: 'Outreach Templates', icon: FileText },
           { id: 'Social Media', label: 'Social Media', icon: Share2 },
         ],
@@ -230,6 +232,10 @@ export const Sidebar: React.FC = () => {
         `ozostack_mailbox_user_v2_${currentUser?.id || 'anonymous'}`,
         []
       ).filter((m) => m.folder === 'inbox' && !m.read).length,
+      WhatsApp: readLS<{ unreadCount?: number }>(
+        `ozostack_wa_chats_user_v1_${currentUser?.id || 'anonymous'}`,
+        []
+      ).reduce((sum, c) => sum + (c.unreadCount || 0), 0),
       Templates: readLS<{ id: string }>('ozostack_outreach_templates_v1', []).length || 9,
     };
   }, [scopeFilter, currentUser, activeNav, storeTick]);

@@ -41,6 +41,7 @@ import { TeamView } from './team/TeamView';
 import { PayrollView } from './payroll/PayrollView';
 import { TemplatesView } from './templates/TemplatesView';
 import { EmailCenterView } from './email/EmailCenterView';
+import { WhatsAppCenterView } from './whatsapp/WhatsAppCenterView';
 import { PersonalNotesTodosView } from './personal/PersonalNotesTodosView';
 
 interface SubViewsProps {
@@ -173,6 +174,10 @@ export const SubViews: React.FC<SubViewsProps> = ({ viewName }) => {
 
   if (viewName === 'Email' || viewName === 'Email & Inbox' || viewName === 'Mail Center') {
     return <EmailCenterView />;
+  }
+
+  if (viewName === 'WhatsApp' || viewName === 'WhatsApp Messenger') {
+    return <WhatsAppCenterView />;
   }
 
   if (

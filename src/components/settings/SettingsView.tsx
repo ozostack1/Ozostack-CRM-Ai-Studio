@@ -230,7 +230,12 @@ export const SettingsView: React.FC = () => {
         localStorage.setItem('ozostack_notifications_v4', JSON.stringify(INITIAL_NOTIFICATIONS));
         for (let i = localStorage.length - 1; i >= 0; i--) {
           const k = localStorage.key(i);
-          if (k && (k.startsWith('ozostack_mailbox_') || k.startsWith('ozostack_sentlog_'))) {
+          if (
+            k &&
+            (k.startsWith('ozostack_mailbox_') ||
+              k.startsWith('ozostack_sentlog_') ||
+              k.startsWith('ozostack_wa_chats_'))
+          ) {
             localStorage.setItem(k, JSON.stringify([]));
           }
         }
@@ -272,7 +277,13 @@ export const SettingsView: React.FC = () => {
         localStorage.setItem('ozostack_notifications_v4', JSON.stringify([]));
         for (let i = localStorage.length - 1; i >= 0; i--) {
           const k = localStorage.key(i);
-          if (k && (k.startsWith('ozostack_mailbox_') || k.startsWith('ozostack_sentlog_') || k.startsWith('ozostack_smtp_'))) {
+          if (
+            k &&
+            (k.startsWith('ozostack_mailbox_') ||
+              k.startsWith('ozostack_sentlog_') ||
+              k.startsWith('ozostack_smtp_') ||
+              k.startsWith('ozostack_wa_'))
+          ) {
             localStorage.removeItem(k);
           }
         }

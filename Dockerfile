@@ -14,7 +14,7 @@ ENV NODE_ENV=production
 ENV PORT=8080
 ENV HOSTNAME="0.0.0.0"
 
-RUN npm init -y > /dev/null && npm install mongodb@6.6.0 nodemailer@6.9.16 imapflow@1.0.171 mailparser@3.7.2 --no-save
+RUN apk add --no-cache git && npm init -y > /dev/null && npm install mongodb@6.6.0 nodemailer@6.9.16 imapflow@1.0.171 mailparser@3.7.2 @whiskeysockets/baileys@6.7.16 qrcode@1.5.4 pino@9.5.0 --no-save
 
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/dist ./dist

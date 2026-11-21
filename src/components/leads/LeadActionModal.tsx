@@ -20,6 +20,7 @@ import { Lead, LeadStatus } from '../../types/crm';
 import { useTheme } from '../../context/ThemeContext';
 import { useSystemCurrency } from '../../data/currencyService';
 import { sendDirectEmail, useSmtpConfig } from '../../data/emailService';
+import { sendDirectWhatsApp, useWhatsAppCenter } from '../../data/whatsappService';
 
 export type ContactActionType = 'whatsapp' | 'email' | 'call';
 
@@ -113,10 +114,12 @@ export const LeadActionModal: React.FC<LeadActionModalProps> = ({
   const { theme } = useTheme();
   const currency = useSystemCurrency();
   const { config: smtpConfig } = useSmtpConfig();
+  const { config: waConfig } = useWhatsAppCenter();
   const isLight = theme === 'white-sky';
 
   const [copied, setCopied] = useState(false);
   const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [isSendingWhatsApp, setIsSendingWhatsApp] = useState(false);
   const [callOutcome, setCallOutcome] = useState('Connected - Productive Discussion');
   const [customMessage, setCustomMessage] = useState('');
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('stage_proposal');
@@ -276,10 +279,25 @@ export const LeadActionModal: React.FC<LeadActionModalProps> = ({
 
   const handleExecuteAction = async () => {
     if (actionType === 'whatsapp') {
-      const waUrl = `https://wa.me/${cleanWhatsappNumber}?text=${encodeURIComponent(customMessage)}`;
-      window.open(waUrl, '_blank');
-      onLogActivity?.(lead.id, `Sent WhatsApp message: "${customMessage.slice(0, 70)}..."`);
-      onClose();
+      setIsSendingWhatsApp(true);
+      try {
+        const res = await sendDirectWhatsApp({
+          toPhone: lead.whatsapp || lead.phone,
+          contactName: lead.name,
+          company: lead.company,
+          text: customMessage,
+          allowWebFallback: true,
+        });
+        onLogActivity?.(
+          lead.id,
+          res.realDelivered
+            ? `Sent Direct WhatsApp message inside CRM (${waConfig.connectedPhone || 'Linked WhatsApp'}): "${customMessage.slice(0, 70)}..."`
+            : `Sent WhatsApp message: "${customMessage.slice(0, 70)}..."`
+        );
+        onClose();
+      } finally {
+        setIsSendingWhatsApp(false);
+      }
     } else if (actionType === 'email') {
       setIsSendingEmail(true);
       try {
@@ -355,6 +373,13 @@ export const LeadActionModal: React.FC<LeadActionModalProps> = ({
                     {smtpConfig.senderEmail
                       ? `(From: ${smtpConfig.senderEmail})`
                       : '(Setup your email in Mail Settings)'}
+                  </span>
+                )}
+                {actionType === 'whatsapp' && (
+                  <span className="ml-1.5 text-emerald-400 font-semibold">
+                    {waConfig.qrConnected
+                      ? `(Direct CRM WhatsApp: ${waConfig.connectedPhone})`
+                      : '(Sync QR in WhatsApp Messenger for direct in-CRM send)'}
                   </span>
                 )}
               </p>
@@ -631,8 +656,18 @@ export const LeadActionModal: React.FC<LeadActionModalProps> = ({
           >
             {actionType === 'whatsapp' && (
               <>
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>Open in WhatsApp</span>
+                {waConfig.qrConnected ? (
+                  <Send className="w-3.5 h-3.5" />
+                ) : (
+                  <ExternalLink className="w-3.5 h-3.5" />
+                )}
+                <span>
+                  {isSendingWhatsApp
+                    ? 'Sending WhatsApp...'
+                    : waConfig.qrConnected
+                    ? 'Send Direct WhatsApp'
+                    : 'Send & Open in WhatsApp'}
+                </span>
               </>
             )}
             {actionType === 'email' && (

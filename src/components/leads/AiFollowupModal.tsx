@@ -20,6 +20,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { useSystemCurrency } from '../../data/currencyService';
 import { LeadMessageTemplate, DEFAULT_TEMPLATES } from './LeadActionModal';
 import { sendDirectEmail, useSmtpConfig } from '../../data/emailService';
+import { sendDirectWhatsApp, useWhatsAppCenter } from '../../data/whatsappService';
 
 interface AiFollowupModalProps {
   isOpen: boolean;
@@ -42,6 +43,7 @@ export const AiFollowupModal: React.FC<AiFollowupModalProps> = ({
   const { theme } = useTheme();
   const currency = useSystemCurrency();
   const { config: smtpConfig } = useSmtpConfig();
+  const { config: waConfig } = useWhatsAppCenter();
   const isLight = theme === 'white-sky';
 
   const [tone, setTone] = useState<DraftTone>('executive');
@@ -257,15 +259,27 @@ OZO STACK`,
     }
   };
 
-  const handleSendViaWhatsApp = () => {
-    const cleanNum = (lead.whatsapp || lead.phone).replace(/[^0-9]/g, '');
-    const waUrl = `https://wa.me/${cleanNum}?text=${encodeURIComponent(editedBody)}`;
-    window.open(waUrl, '_blank');
-    onLogActivity(
-      lead.id,
-      `AI Follow-up WhatsApp sent (${tone} tone) to ${cleanNum}`
-    );
-    onClose();
+  const handleSendViaWhatsApp = async () => {
+    setIsSending(true);
+    try {
+      const cleanNum = (lead.whatsapp || lead.phone).replace(/[^0-9]/g, '');
+      const res = await sendDirectWhatsApp({
+        toPhone: lead.whatsapp || lead.phone,
+        contactName: lead.name,
+        company: lead.company,
+        text: editedBody,
+        allowWebFallback: true,
+      });
+      onLogActivity(
+        lead.id,
+        res.realDelivered
+          ? `AI Follow-up WhatsApp delivered directly via CRM (${tone} tone) to ${cleanNum}`
+          : `AI Follow-up WhatsApp sent (${tone} tone) to ${cleanNum}`
+      );
+      onClose();
+    } finally {
+      setIsSending(false);
+    }
   };
 
   return (
@@ -555,10 +569,17 @@ OZO STACK`,
             ) : (
               <button
                 onClick={handleSendViaWhatsApp}
-                className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg shadow-sm shadow-emerald-600/25 active:scale-95 transition-all"
+                disabled={isSending}
+                className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-lg shadow-sm shadow-emerald-600/25 active:scale-95 transition-all"
               >
                 <MessageSquare className="w-3.5 h-3.5" />
-                <span>Open in WhatsApp</span>
+                <span>
+                  {isSending
+                    ? 'Sending...'
+                    : waConfig.qrConnected
+                    ? `Send Direct WhatsApp (${waConfig.connectedPhone})`
+                    : 'Send & Open in WhatsApp'}
+                </span>
               </button>
             )}
           </div>
