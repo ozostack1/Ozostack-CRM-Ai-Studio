@@ -19,6 +19,9 @@ import {
   KeyRound,
   LogOut,
   Bookmark,
+  Briefcase,
+  ShieldCheck,
+  Phone,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
@@ -31,14 +34,20 @@ import {
   sendDirectWhatsApp,
   upsertWaMessage,
   saveWaConversations,
+  openOrCreateWaConversation,
   normalizePhoneDigits,
   formatDisplayPhone,
 } from '../../data/whatsappService';
+import { INITIAL_LEADS } from '../../data/mockData';
+import { INITIAL_EMPLOYEES } from '../team/teamMockData';
 import { DEFAULT_TEMPLATES, LeadMessageTemplate } from '../leads/LeadActionModal';
+
+const normName = (s?: string) =>
+  (s || '').replace(/\s*\(.*?\)\s*/g, '').trim().toLowerCase();
 
 export const WhatsAppCenterView: React.FC = () => {
   const { theme } = useTheme();
-  const { currentUser } = useAuth();
+  const { currentUser, users } = useAuth();
   const isLight = theme === 'white-sky';
   const { config, conversations, updateConfig } = useWhatsAppCenter();
 
@@ -63,9 +72,10 @@ export const WhatsAppCenterView: React.FC = () => {
   const [metaWabaId, setMetaWabaId] = useState(config.metaWabaId);
   const [metaToken, setMetaToken] = useState(config.metaAccessToken);
 
-  // Chat Workspace State: 'chats' (1-on-1 only) | 'groups' (WhatsApp Groups only) | 'unread'
+  // Left Panel Active Section: 'chats' | 'groups' | 'leads' (Own Leads Only) | 'staff' (CRM Staff)
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterTab, setFilterTab] = useState<'chats' | 'groups' | 'unread'>('chats');
+  const [activeSection, setActiveSection] = useState<'chats' | 'groups' | 'leads' | 'staff'>('chats');
+  const [unreadOnly, setUnreadOnly] = useState(false);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(
     conversations[0]?.id || null
   );
@@ -130,6 +140,111 @@ export const WhatsAppCenterView: React.FC = () => {
     };
   }, [currentUser?.id, isConnectOpen, config.qrConnected]);
 
+  // 1. STRICTLY OWN LEADS ONLY (Matches currentUser.name)
+  const myOwnLeads = useMemo(() => {
+    const myNorm = normName(currentUser?.name);
+    if (!myNorm) return [];
+    try {
+      const raw = localStorage.getItem('ozostack_leads_v2');
+      const parsed = raw !== null ? JSON.parse(raw) : INITIAL_LEADS;
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter((l: any) => l && normName(l.owner) === myNorm)
+        .map((l: any) => {
+          const digits = normalizePhoneDigits(l.whatsapp || l.phone || '');
+          return {
+            id: l.id || digits || l.name,
+            name: l.name || 'Unnamed Lead',
+            company: l.company || 'Lead',
+            status: l.status || 'New Lead',
+            phone: digits ? formatDisplayPhone(digits) : l.whatsapp || l.phone || '',
+            digits,
+            owner: l.owner,
+          };
+        });
+    } catch {
+      return [];
+    }
+  }, [currentUser?.name, conversations.length]);
+
+  // 2. ALL CRM STAFF / TEAM MEMBERS (Team & HR + Active Auth Staff)
+  const staffMembers = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        role: string;
+        department: string;
+        phone: string;
+        digits: string;
+        email: string;
+        isMe: boolean;
+      }
+    >();
+    const myNorm = normName(currentUser?.name);
+    const myEmail = (currentUser?.email || '').trim().toLowerCase();
+
+    try {
+      const rawTeam = localStorage.getItem('ozostack_team_members_v1');
+      const teamList = rawTeam !== null ? JSON.parse(rawTeam) : INITIAL_EMPLOYEES;
+      if (Array.isArray(teamList)) {
+        for (const m of teamList) {
+          if (!m || !m.name) continue;
+          const key = (m.email || m.name).trim().toLowerCase();
+          const digits = normalizePhoneDigits(m.phone || '');
+          map.set(key, {
+            id: m.id || key,
+            name: m.name,
+            role: m.role || 'Team Member',
+            department: m.department || 'Staff',
+            phone: digits ? formatDisplayPhone(digits) : m.phone || '',
+            digits,
+            email: m.email || '',
+            isMe:
+              normName(m.name) === myNorm ||
+              (Boolean(myEmail) && (m.email || '').trim().toLowerCase() === myEmail),
+          });
+        }
+      }
+    } catch {}
+
+    if (Array.isArray(users)) {
+      for (const u of users) {
+        if (!u || u.status !== 'Active') continue;
+        const emailKey = (u.email || '').trim().toLowerCase();
+        const nameKey = normName(u.name);
+        const existingEntry =
+          map.get(emailKey) ||
+          Array.from(map.values()).find((item) => normName(item.name) === nameKey);
+        const uPhone = (u as any).phone || '';
+        const digits = normalizePhoneDigits(uPhone || existingEntry?.digits || '');
+        if (existingEntry) {
+          if (!existingEntry.digits && digits) {
+            existingEntry.digits = digits;
+            existingEntry.phone = formatDisplayPhone(digits);
+          }
+        } else {
+          map.set(emailKey || u.id, {
+            id: u.id,
+            name: u.name,
+            role: u.jobTitle || 'Staff',
+            department: u.department || 'Team',
+            phone: digits ? formatDisplayPhone(digits) : uPhone,
+            digits,
+            email: u.email || '',
+            isMe: u.id === currentUser?.id || nameKey === myNorm,
+          });
+        }
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => {
+      if (Boolean(a.digits) !== Boolean(b.digits)) return a.digits ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [users, currentUser?.id, currentUser?.name, currentUser?.email]);
+
   // Saved templates
   const templates = useMemo<LeadMessageTemplate[]>(() => {
     try {
@@ -142,13 +257,13 @@ export const WhatsAppCenterView: React.FC = () => {
     return DEFAULT_TEMPLATES;
   }, []);
 
-  const directChatsCount = useMemo(
-    () => conversations.filter((c) => !c.isGroup).length,
+  const directChats = useMemo(
+    () => conversations.filter((c) => !c.isGroup),
     [conversations]
   );
 
-  const groupChatsCount = useMemo(
-    () => conversations.filter((c) => Boolean(c.isGroup)).length,
+  const groupChats = useMemo(
+    () => conversations.filter((c) => Boolean(c.isGroup)),
     [conversations]
   );
 
@@ -159,10 +274,9 @@ export const WhatsAppCenterView: React.FC = () => {
 
   const filteredConversations = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return conversations.filter((c) => {
-      if (filterTab === 'chats' && c.isGroup) return false;
-      if (filterTab === 'groups' && !c.isGroup) return false;
-      if (filterTab === 'unread' && c.unreadCount === 0) return false;
+    const base = activeSection === 'groups' ? groupChats : directChats;
+    return base.filter((c) => {
+      if (unreadOnly && c.unreadCount === 0) return false;
       if (q) {
         return (
           c.contactName.toLowerCase().includes(q) ||
@@ -173,12 +287,38 @@ export const WhatsAppCenterView: React.FC = () => {
       }
       return true;
     });
-  }, [conversations, filterTab, searchQuery]);
+  }, [directChats, groupChats, activeSection, unreadOnly, searchQuery]);
+
+  const filteredOwnLeads = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return myOwnLeads;
+    return myOwnLeads.filter(
+      (l) =>
+        l.name.toLowerCase().includes(q) ||
+        l.company.toLowerCase().includes(q) ||
+        l.phone.toLowerCase().includes(q) ||
+        l.status.toLowerCase().includes(q)
+    );
+  }, [myOwnLeads, searchQuery]);
+
+  const filteredStaff = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return staffMembers;
+    return staffMembers.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        s.role.toLowerCase().includes(q) ||
+        s.department.toLowerCase().includes(q) ||
+        s.phone.toLowerCase().includes(q) ||
+        s.email.toLowerCase().includes(q)
+    );
+  }, [staffMembers, searchQuery]);
 
   const selectedChat = useMemo(
     () =>
       conversations.find((c) => c.id === selectedChatId) ||
       filteredConversations[0] ||
+      conversations[0] ||
       null,
     [conversations, selectedChatId, filteredConversations]
   );
@@ -197,23 +337,54 @@ export const WhatsAppCenterView: React.FC = () => {
     }
   };
 
+  // Instant 1-Click Open Chat with a Lead or Staff Member
+  const handleOpenDirectChat = (person: {
+    name: string;
+    phone: string;
+    digits: string;
+    company?: string;
+  }) => {
+    if (!person.digits) {
+      setNewChatName(person.name);
+      setNewChatCompany(person.company || '');
+      setNewChatPhone('');
+      setNewChatText(`Hi ${person.name.split(' ')[0]}, `);
+      setIsNewChatOpen(true);
+      return;
+    }
+    const conv = openOrCreateWaConversation({
+      contactPhone: person.digits,
+      contactName: person.name,
+      company: person.company,
+    });
+    if (conv) {
+      setSelectedChatId(conv.id);
+    }
+  };
+
   // Manual Full Sync Trigger
   const handleManualSyncNow = async () => {
     setIsSyncingNow(true);
     try {
       const res = await pollWaSessionStatus(true);
-      if (res.ok && res.status === 'connected') {
+      if (res.ok && res.syncedChatsCount > 0) {
         showBanner(
           'sent',
           'WhatsApp Chats & Groups Synced!',
-          `Synced ${res.syncedChatsCount} chats/groups and ${res.newMessagesCount} new messages from your WhatsApp session.`
+          `Loaded ${res.syncedChatsCount} conversations and ${res.newMessagesCount} messages.`
+        );
+      } else if (res.ok && res.status === 'connected') {
+        showBanner(
+          'sent',
+          'WhatsApp Sync Complete!',
+          'Connected to your WhatsApp session.'
         );
       } else {
         setIsConnectOpen(true);
         showBanner(
           'info',
-          'Scan QR to Sync WhatsApp Chats & Groups',
-          'Click "Generate Live QR" below and scan from your phone to sync all chats and groups.'
+          'Scan QR to Sync Live WhatsApp',
+          'Click "Generate Live QR" below and scan from your phone.'
         );
       }
     } finally {
@@ -292,7 +463,7 @@ export const WhatsAppCenterView: React.FC = () => {
       selectedChat && !selectedChat.isGroup
         ? {
             name: selectedChat.contactName,
-            phone: selectedChat.contactPhone,
+            phone: selectedChat.id,
             company: selectedChat.company || 'CRM',
             text: `Hi ${currentUser?.name || 'there'}, thanks for the update! We received your message and are ready to proceed with the next steps.`,
           }
@@ -312,6 +483,7 @@ export const WhatsAppCenterView: React.FC = () => {
 
     if (conv) {
       setSelectedChatId(conv.id);
+      setActiveSection('chats');
     }
     showBanner(
       'received',
@@ -328,7 +500,7 @@ export const WhatsAppCenterView: React.FC = () => {
     setMessageText('');
 
     if (forceWeb && !selectedChat.isGroup) {
-      const digits = normalizePhoneDigits(selectedChat.contactPhone);
+      const digits = normalizePhoneDigits(selectedChat.id);
       window.open(
         `https://wa.me/${digits}?text=${encodeURIComponent(textToSend)}`,
         '_blank',
@@ -336,7 +508,7 @@ export const WhatsAppCenterView: React.FC = () => {
       );
       upsertWaMessage(
         {
-          contactPhone: selectedChat.contactPhone,
+          contactPhone: selectedChat.id,
           contactName: selectedChat.contactName,
           company: selectedChat.company,
           fromMe: true,
@@ -351,7 +523,7 @@ export const WhatsAppCenterView: React.FC = () => {
     setIsSending(true);
     try {
       const res = await sendDirectWhatsApp({
-        toPhone: selectedChat.isGroup ? selectedChat.id : selectedChat.contactPhone,
+        toPhone: selectedChat.id,
         contactName: selectedChat.contactName,
         company: selectedChat.company,
         isGroup: selectedChat.isGroup,
@@ -386,7 +558,7 @@ export const WhatsAppCenterView: React.FC = () => {
       });
 
       setSelectedChatId(digits);
-      setFilterTab('chats');
+      setActiveSection('chats');
       setIsNewChatOpen(false);
       setNewChatPhone('');
       setNewChatName('');
@@ -432,6 +604,9 @@ export const WhatsAppCenterView: React.FC = () => {
       ? 'bg-slate-50 border-slate-200 text-slate-900 focus:border-emerald-500 focus:bg-white'
       : 'bg-slate-900 border-slate-700 text-white focus:border-emerald-400'
   }`;
+
+  const isDirectPhoneChat =
+    selectedChat && !selectedChat.isGroup && selectedChat.id.replace(/[^0-9]/g, '').length <= 13;
 
   return (
     <div className="space-y-4">
@@ -505,7 +680,7 @@ export const WhatsAppCenterView: React.FC = () => {
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-1.5">
                 <Lock className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                 <span>
-                  <strong>100% Per-User Private WhatsApp:</strong> Only you ({currentUser?.name}) can see your linked WhatsApp number, direct chats, and groups.
+                  <strong>100% Per-User Private Workspace:</strong> Synced Chats ({directChats.length}), Groups ({groupChats.length}), My Own Leads ({myOwnLeads.length}), and CRM Staff ({staffMembers.length}).
                 </span>
               </p>
             </div>
@@ -679,7 +854,7 @@ export const WhatsAppCenterView: React.FC = () => {
                 <div className="lg:col-span-8 space-y-3">
                   <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold">
                     <Smartphone className="w-3.5 h-3.5" />
-                    <span>Direct Chats + WhatsApp Groups Sync</span>
+                    <span>Direct Chats + Groups + Own Leads + Staff</span>
                   </div>
                   <h3 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white">
                     How to Sync Your WhatsApp Chats &amp; Groups:
@@ -692,7 +867,7 @@ export const WhatsAppCenterView: React.FC = () => {
                       Open <strong>WhatsApp</strong> on your phone → <strong>Menu (⋮) / Settings → Linked Devices → Link a Device</strong> and scan the QR code.
                     </li>
                     <li>
-                      Your 1-on-1 conversations appear in <strong>Chats ({directChatsCount})</strong> and your WhatsApp groups appear in <strong>Groups ({groupChatsCount})</strong>!
+                      Your 1-on-1 conversations appear in <strong>Chats ({directChats.length})</strong>, your WhatsApp groups in <strong>Groups ({groupChats.length})</strong>, your personal leads in <strong>My Leads ({myOwnLeads.length})</strong>, and internal team members in <strong>Staff ({staffMembers.length})</strong>.
                     </li>
                   </ol>
                   {qrDataUrl && (
@@ -765,87 +940,289 @@ export const WhatsAppCenterView: React.FC = () => {
       </div>
 
       {/* =================================================================== */}
-      {/* 2-PANE WHATSAPP MESSENGER WORKSPACE: CHATS & GROUPS | LIVE THREAD   */}
+      {/* 2-PANE WHATSAPP MESSENGER WORKSPACE: 4-TAB SIDEBAR | LIVE THREAD    */}
       {/* =================================================================== */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 min-h-[620px]">
-        {/* LEFT PANE: CHATS, GROUPS & UNREAD TABS (4 cols) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 min-h-[640px]">
+        {/* LEFT PANE: CHATS | GROUPS | MY LEADS | STAFF (4 cols) */}
         <div className={`lg:col-span-4 rounded-2xl border flex flex-col overflow-hidden ${cardBg}`}>
           <div className="p-3.5 border-b border-slate-100 dark:border-slate-800 space-y-2.5">
-            <div className="flex items-center justify-between gap-1">
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setFilterTab('chats')}
-                  className={`px-3 py-1 rounded-lg text-[11px] font-extrabold transition-colors cursor-pointer flex items-center gap-1 ${
-                    filterTab === 'chats'
-                      ? 'bg-emerald-500 text-white shadow-xs'
-                      : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'
-                  }`}
-                >
+            {/* 4-Tab Segmented Navigation Grid */}
+            <div
+              className={`grid grid-cols-4 gap-1 p-1 rounded-xl border ${
+                isLight
+                  ? 'bg-slate-100/80 border-slate-200/80'
+                  : 'bg-slate-900/90 border-slate-800'
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => setActiveSection('chats')}
+                className={`py-1.5 px-1.5 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
+                  activeSection === 'chats'
+                    ? 'bg-emerald-500 text-white shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white'
+                }`}
+              >
+                <div className="flex items-center gap-1">
                   <MessageSquare className="w-3 h-3" />
-                  <span>Chats ({directChatsCount})</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFilterTab('groups')}
-                  className={`px-3 py-1 rounded-lg text-[11px] font-extrabold transition-colors cursor-pointer flex items-center gap-1 ${
-                    filterTab === 'groups'
-                      ? 'bg-emerald-500 text-white shadow-xs'
-                      : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'
-                  }`}
-                >
+                  <span>Chats</span>
+                </div>
+                <span className="text-[9px] opacity-90">({directChats.length})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveSection('groups')}
+                className={`py-1.5 px-1.5 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
+                  activeSection === 'groups'
+                    ? 'bg-emerald-500 text-white shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white'
+                }`}
+              >
+                <div className="flex items-center gap-1">
                   <Users className="w-3 h-3" />
-                  <span>Groups ({groupChatsCount})</span>
-                </button>
+                  <span>Groups</span>
+                </div>
+                <span className="text-[9px] opacity-90">({groupChats.length})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveSection('leads')}
+                className={`py-1.5 px-1.5 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
+                  activeSection === 'leads'
+                    ? 'bg-emerald-500 text-white shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white'
+                }`}
+              >
+                <div className="flex items-center gap-1">
+                  <Briefcase className="w-3 h-3" />
+                  <span>My Leads</span>
+                </div>
+                <span className="text-[9px] opacity-90">({myOwnLeads.length})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveSection('staff')}
+                className={`py-1.5 px-1.5 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
+                  activeSection === 'staff'
+                    ? 'bg-emerald-500 text-white shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white'
+                }`}
+              >
+                <div className="flex items-center gap-1">
+                  <ShieldCheck className="w-3 h-3" />
+                  <span>Staff</span>
+                </div>
+                <span className="text-[9px] opacity-90">({staffMembers.length})</span>
+              </button>
+            </div>
+
+            {/* Search Input & Unread Filter Toggle */}
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder={
+                    activeSection === 'groups'
+                      ? 'Search WhatsApp groups...'
+                      : activeSection === 'leads'
+                      ? 'Search your own leads...'
+                      : activeSection === 'staff'
+                      ? 'Search staff by name, role, dept...'
+                      : 'Search chats by name, phone, message...'
+                  }
+                  className={`${inputCls} pl-8 py-1.5`}
+                />
+              </div>
+
+              {(activeSection === 'chats' || activeSection === 'groups') && (
                 <button
                   type="button"
-                  onClick={() => setFilterTab('unread')}
-                  className={`px-3 py-1 rounded-lg text-[11px] font-extrabold transition-colors cursor-pointer ${
-                    filterTab === 'unread'
-                      ? 'bg-emerald-500 text-white shadow-xs'
-                      : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'
+                  onClick={() => setUnreadOnly((prev) => !prev)}
+                  className={`px-2.5 py-1.5 rounded-xl text-[10px] font-extrabold border shrink-0 transition-colors cursor-pointer ${
+                    unreadOnly
+                      ? 'bg-emerald-500 text-white border-emerald-500'
+                      : isLight
+                      ? 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                      : 'bg-slate-900 border-slate-700 text-slate-300'
                   }`}
+                  title="Filter unread conversations"
                 >
                   Unread ({totalUnread})
                 </button>
-              </div>
-            </div>
-
-            <div className="relative">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={
-                  filterTab === 'groups'
-                    ? 'Search WhatsApp groups...'
-                    : 'Search chats by name, phone, message...'
-                }
-                className={`${inputCls} pl-8 py-1.5`}
-              />
+              )}
             </div>
           </div>
 
-          {/* Conversations List (Chats or Groups) */}
+          {/* =============================================================== */}
+          {/* DYNAMIC LIST BODY FOR CHATS | GROUPS | MY LEADS | STAFF         */}
+          {/* =============================================================== */}
           <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/80 max-h-[520px]">
-            {filteredConversations.length === 0 ? (
-              <div className="py-12 px-4 text-center space-y-2.5">
-                {filterTab === 'groups' ? (
+            {/* SECTION A: MY OWN LEADS */}
+            {activeSection === 'leads' ? (
+              filteredOwnLeads.length === 0 ? (
+                <div className="py-12 px-5 text-center space-y-2">
+                  <Briefcase className="w-8 h-8 text-emerald-400 mx-auto opacity-50" />
+                  <p className="text-xs font-bold text-slate-500">
+                    No personal leads assigned to {currentUser?.name}
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    Only leads created by or assigned to you ({currentUser?.name}) appear here for privacy.
+                  </p>
+                </div>
+              ) : (
+                filteredOwnLeads.map((lead) => (
+                  <div
+                    key={lead.id}
+                    onClick={() =>
+                      handleOpenDirectChat({
+                        name: lead.name,
+                        phone: lead.phone,
+                        digits: lead.digits,
+                        company: lead.company,
+                      })
+                    }
+                    className={`p-3.5 cursor-pointer transition-colors flex items-center justify-between gap-3 ${
+                      isLight ? 'hover:bg-emerald-50/70' : 'hover:bg-slate-800/50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-emerald-500 to-teal-600 text-white font-extrabold text-xs flex items-center justify-center shrink-0 uppercase shadow-xs">
+                        {lead.name[0] || 'L'}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-extrabold text-slate-900 dark:text-white truncate">
+                            {lead.name}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 shrink-0">
+                            {lead.status}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                          <span className="font-semibold text-sky-500">{lead.company}</span>
+                          {lead.phone && (
+                            <span className="font-mono text-[10px] text-emerald-600 dark:text-emerald-400">
+                              {' '}
+                              · {lead.phone}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-xl bg-emerald-500 text-white text-[10px] font-extrabold shrink-0 shadow-xs flex items-center gap-1">
+                      <MessageSquare className="w-3 h-3" />
+                      <span>Chat</span>
+                    </span>
+                  </div>
+                ))
+              )
+            ) : activeSection === 'staff' ? (
+              /* SECTION B: ALL CRM STAFF / TEAM MEMBERS */
+              filteredStaff.length === 0 ? (
+                <div className="py-12 px-5 text-center space-y-2">
+                  <ShieldCheck className="w-8 h-8 text-emerald-400 mx-auto opacity-50" />
+                  <p className="text-xs font-bold text-slate-500">No staff members found</p>
+                </div>
+              ) : (
+                filteredStaff.map((staff) => (
+                  <div
+                    key={staff.id}
+                    onClick={() =>
+                      handleOpenDirectChat({
+                        name: staff.name,
+                        phone: staff.phone,
+                        digits: staff.digits,
+                        company: `${staff.role} · ${staff.department}`,
+                      })
+                    }
+                    className={`p-3.5 cursor-pointer transition-colors flex items-center justify-between gap-3 ${
+                      isLight ? 'hover:bg-emerald-50/70' : 'hover:bg-slate-800/50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-indigo-500 to-sky-600 text-white font-extrabold text-xs flex items-center justify-center shrink-0 uppercase shadow-xs">
+                        {staff.name[0] || 'S'}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-extrabold text-slate-900 dark:text-white truncate">
+                            {staff.name}
+                          </span>
+                          {staff.isMe && (
+                            <span className="px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-sky-500/15 text-sky-500 shrink-0">
+                              You
+                            </span>
+                          )}
+                          <span className="px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-indigo-500/15 text-indigo-500 dark:text-indigo-300 truncate max-w-[110px]">
+                            {staff.role}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5 flex items-center gap-1">
+                          <span>{staff.department}</span>
+                          {staff.phone ? (
+                            <span className="font-mono text-[10px] text-emerald-600 dark:text-emerald-400">
+                              · {staff.phone}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-slate-400">· {staff.email}</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <span
+                      className={`px-2.5 py-1 rounded-xl text-[10px] font-extrabold shrink-0 flex items-center gap-1 ${
+                        staff.digits
+                          ? 'bg-emerald-500 text-white shadow-xs'
+                          : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                      }`}
+                    >
+                      <Phone className="w-3 h-3" />
+                      <span>{staff.digits ? 'Chat' : 'Set No.'}</span>
+                    </span>
+                  </div>
+                ))
+              )
+            ) : filteredConversations.length === 0 ? (
+              /* SECTION C & D: EMPTY STATE FOR CHATS OR GROUPS */
+              <div className="py-12 px-5 text-center space-y-2.5">
+                {activeSection === 'groups' ? (
                   <Users className="w-8 h-8 text-emerald-400 mx-auto opacity-50" />
                 ) : (
                   <MessageSquare className="w-8 h-8 text-emerald-400 mx-auto opacity-50" />
                 )}
                 <p className="text-xs font-bold text-slate-500">
-                  {filterTab === 'groups'
+                  {activeSection === 'groups'
                     ? 'No WhatsApp groups synced yet'
-                    : 'No WhatsApp chats yet'}
+                    : 'No 1-on-1 WhatsApp chats yet'}
                 </p>
                 <p className="text-[11px] text-slate-400">
-                  Click <strong>"Sync Chats &amp; Groups"</strong> in the top bar to load your latest WhatsApp conversations.
+                  Click <strong>"Sync Chats &amp; Groups"</strong> in the top bar, or open{' '}
+                  <button
+                    type="button"
+                    onClick={() => setActiveSection('leads')}
+                    className="text-emerald-500 font-bold underline cursor-pointer"
+                  >
+                    My Leads ({myOwnLeads.length})
+                  </button>{' '}
+                  or{' '}
+                  <button
+                    type="button"
+                    onClick={() => setActiveSection('staff')}
+                    className="text-emerald-500 font-bold underline cursor-pointer"
+                  >
+                    Staff ({staffMembers.length})
+                  </button>{' '}
+                  to message someone directly.
                 </p>
               </div>
             ) : (
+              /* SECTION C & D: LIST OF SYNCED 1-ON-1 CHATS OR WHATSAPP GROUPS */
               filteredConversations.map((conv) => {
                 const isSelected = selectedChat?.id === conv.id;
                 return (
@@ -889,6 +1266,9 @@ export const WhatsAppCenterView: React.FC = () => {
                       </div>
                       <div className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 truncate">
                         {conv.contactPhone}
+                        {conv.company && !conv.isGroup && (
+                          <span className="text-slate-400"> · {conv.company}</span>
+                        )}
                       </div>
                       <div className="flex items-center justify-between gap-2 mt-1">
                         <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
@@ -916,10 +1296,10 @@ export const WhatsAppCenterView: React.FC = () => {
                 <MessageSquare className="w-7 h-7" />
               </div>
               <h3 className="text-sm font-extrabold text-slate-700 dark:text-slate-200">
-                Select a WhatsApp Chat or Group on the left
+                Select a Chat, Group, Lead, or Staff Member on the left
               </h3>
               <p className="text-xs text-slate-400 max-w-sm">
-                Switch between <strong>Chats ({directChatsCount})</strong> and <strong>Groups ({groupChatsCount})</strong> on the left panel, or click <strong>"Sync Chats &amp; Groups"</strong> to pull your latest WhatsApp messages.
+                Switch between <strong>Chats ({directChats.length})</strong>, <strong>Groups ({groupChats.length})</strong>, <strong>My Leads ({myOwnLeads.length})</strong>, and <strong>Staff ({staffMembers.length})</strong> on the left panel.
               </p>
               <button
                 type="button"
@@ -971,11 +1351,11 @@ export const WhatsAppCenterView: React.FC = () => {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  {!selectedChat.isGroup && (
+                  {isDirectPhoneChat && (
                     <button
                       type="button"
                       onClick={() => {
-                        const digits = normalizePhoneDigits(selectedChat.contactPhone);
+                        const digits = normalizePhoneDigits(selectedChat.id);
                         window.open(`https://wa.me/${digits}`, '_blank', 'noopener,noreferrer');
                       }}
                       className="px-3 py-1.5 rounded-xl border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
@@ -1009,7 +1389,7 @@ export const WhatsAppCenterView: React.FC = () => {
                         : `Chat with ${selectedChat.contactName} (${selectedChat.contactPhone})`}
                     </p>
                     <p className="text-[11px] text-slate-400">
-                      Type a message below to send directly via your linked WhatsApp.
+                      Type a message below or select a quick template to send directly via your linked WhatsApp.
                     </p>
                   </div>
                 ) : (
@@ -1090,7 +1470,7 @@ export const WhatsAppCenterView: React.FC = () => {
                     className={`${inputCls} resize-none flex-1`}
                   />
 
-                  {!selectedChat.isGroup && (
+                  {isDirectPhoneChat && (
                     <button
                       type="button"
                       onClick={() => handleSendMessage(undefined, true)}
@@ -1134,7 +1514,7 @@ export const WhatsAppCenterView: React.FC = () => {
                     Start New WhatsApp Chat
                   </h3>
                   <p className="text-[11px] text-slate-400">
-                    Enter any WhatsApp number with country code
+                    Pick from your Own Leads / Staff or enter any WhatsApp number
                   </p>
                 </div>
               </div>

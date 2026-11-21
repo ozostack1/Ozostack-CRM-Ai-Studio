@@ -31,7 +31,7 @@ export interface WaChatMessage {
 }
 
 export interface WaConversation {
-  id: string; // normalized digits e.g. '919876543210' OR group JID '120363...@g.us'
+  id: string; // normalized digits e.g. '919876543210' OR @lid digits OR group JID '120363...@g.us'
   ownerUserId: string;
   isGroup?: boolean;
   contactName: string;
@@ -70,8 +70,7 @@ export function isValidChatIdentifier(id: string, isGroup?: boolean): boolean {
   const s = String(id || '').trim();
   if (isGroup || s.endsWith('@g.us')) return s.endsWith('@g.us');
   const digits = s.replace(/[^0-9]/g, '');
-  // Valid international phone numbers are 10 to 13 digits; 14-15+ digits are raw WhatsApp @lid IDs
-  return digits.length >= 10 && digits.length <= 13;
+  return digits.length >= 7;
 }
 
 export function formatDisplayPhone(digitsOrJid: string, isGroup?: boolean): string {
@@ -80,6 +79,9 @@ export function formatDisplayPhone(digitsOrJid: string, isGroup?: boolean): stri
   if (!clean) return '';
   if (clean.length === 12 && clean.startsWith('91')) {
     return `+91 ${clean.slice(2, 7)} ${clean.slice(7)}`;
+  }
+  if (clean.length >= 14) {
+    return 'WhatsApp Direct Chat';
   }
   return `+${clean}`;
 }
@@ -102,7 +104,6 @@ export function getWaConfig(forUserId?: string): WaUserConfig {
 
   try {
     if (typeof window !== 'undefined' && window.localStorage) {
-      // Remove legacy contacts store so group member numbers never pollute storage
       window.localStorage.removeItem(`ozostack_wa_contacts_user_v1_${targetUserId}`);
       const raw = window.localStorage.getItem(getWaConfigKey(targetUserId));
       if (raw) {
@@ -187,6 +188,55 @@ export function saveWaConversations(conversations: WaConversation[], forUserId?:
   } catch {
     /* ignore */
   }
+}
+
+export function openOrCreateWaConversation(params: {
+  contactPhone: string;
+  contactName?: string;
+  company?: string;
+}): WaConversation | null {
+  const activeUser = getActiveMailUser();
+  const digits = normalizePhoneDigits(params.contactPhone);
+  if (!digits) return null;
+
+  const current = getWaConversations(activeUser.id);
+  const existingIdx = current.findIndex((c) => c.id === digits);
+  const displayPhone = formatDisplayPhone(digits);
+  const displayName = (params.contactName || '').trim() || displayPhone;
+
+  if (existingIdx >= 0) {
+    const existing = current[existingIdx];
+    const updatedConv: WaConversation = {
+      ...existing,
+      contactName:
+        existing.contactName && !existing.contactName.startsWith('+')
+          ? existing.contactName
+          : displayName,
+      company: params.company || existing.company,
+      unreadCount: 0,
+    };
+    const nextList = [updatedConv, ...current.filter((_, idx) => idx !== existingIdx)];
+    saveWaConversations(nextList, activeUser.id);
+    return updatedConv;
+  }
+
+  const nowIso = new Date().toISOString();
+  const newConv: WaConversation = {
+    id: digits,
+    ownerUserId: activeUser.id,
+    isGroup: false,
+    contactName: displayName,
+    contactPhone: displayPhone,
+    company: params.company,
+    unreadCount: 0,
+    pinned: false,
+    lastMessageText: 'Ready to chat on WhatsApp',
+    lastMessageAt: nowIso,
+    messages: [],
+  };
+
+  saveWaConversations([newConv, ...current], activeUser.id);
+  return newConv;
 }
 
 export function upsertWaMessage(
@@ -325,7 +375,7 @@ function mergeServerSyncData(data: {
       const isGroup = Boolean(ch?.isGroup || isGroupChatId(ch?.id || ch?.jid || ''));
       const chatId = isGroup
         ? `${String(ch?.id || ch?.jid).split('@')[0]}@g.us`
-        : normalizePhoneDigits(ch?.phone || ch?.id || '');
+        : normalizePhoneDigits(ch?.id || ch?.phone || '');
       if (!chatId || !isValidChatIdentifier(chatId, isGroup)) continue;
       if (!isGroup && myPhoneDigits && chatId === myPhoneDigits) continue;
 
@@ -338,7 +388,7 @@ function mergeServerSyncData(data: {
           ? rawChatName
           : isGroup
           ? 'WhatsApp Group'
-          : displayPhone;
+          : `+${chatId}`;
 
       const existing = convMap.get(chatId);
       if (!existing) {
@@ -408,7 +458,7 @@ function mergeServerSyncData(data: {
           ? candidateName
           : isGroup
           ? 'WhatsApp Group'
-          : displayPhone;
+          : `+${chatId}`;
 
       let conv = convMap.get(chatId);
       if (!conv) {
@@ -653,7 +703,7 @@ export async function sendDirectWhatsApp(params: {
     ? `${String(params.toPhone).split('@')[0]}@g.us`
     : normalizePhoneDigits(params.toPhone);
   const text = (params.text || '').trim();
-  const allowFallback = !isGroup && params.allowWebFallback !== false;
+  const allowFallback = !isGroup && targetId.length <= 13 && params.allowWebFallback !== false;
 
   if (!targetId || !text) {
     return {
@@ -733,7 +783,7 @@ export async function sendDirectWhatsApp(params: {
     }
   }
 
-  // Fallback for 1-on-1 chats: Open WhatsApp Web / App with pre-filled message
+  // Fallback for 1-on-1 phone chats: Open WhatsApp Web / App with pre-filled message
   const waUrl = `https://wa.me/${targetId}?text=${encodeURIComponent(text)}`;
   window.open(waUrl, '_blank', 'noopener,noreferrer');
 
