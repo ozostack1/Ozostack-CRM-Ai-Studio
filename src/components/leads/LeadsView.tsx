@@ -347,6 +347,20 @@ export const LeadsView: React.FC = () => {
     });
 
     showToast(`Successfully imported ${importedLeads.length} leads into "${importedLeads[0].status}"!`);
+
+    // Trigger active "New Lead Created" workflows for imported leads (capped at first 10 per batch)
+    importedLeads.slice(0, 10).forEach((l) => {
+      triggerCrmWorkflow('lead_created', {
+        name: l.name,
+        email: l.email,
+        phone: l.whatsapp || l.phone,
+        company: l.company,
+        stage: l.status,
+        value: `${currency.symbol}${l.value.toLocaleString()}`,
+        source: l.source || 'Bulk Import',
+        owner: l.owner,
+      }).catch(() => {});
+    });
   };
 
   const handleQuickCreateStage = (e: React.FormEvent) => {

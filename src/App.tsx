@@ -22,6 +22,7 @@ import { DocumentUploadModal } from './components/documents/DocumentUploadModal'
 import { TodoModal, NoteModal } from './components/personal/PersonalNotesTodosView';
 import { PersonalTodo, PersonalNote } from './types/personalNotesTodos';
 import { loadAllTodos, saveAllTodos, loadAllNotes, saveAllNotes } from './data/personalNotesTodosData';
+import { triggerCrmWorkflow } from './data/workflowService';
 
 import {
   Lead,
@@ -249,6 +250,16 @@ function DashboardContent() {
             owner: newLead.owner,
             recipient: newLead.owner,
           });
+          triggerCrmWorkflow('lead_created', {
+            name: newLead.name,
+            email: newLead.email,
+            phone: newLead.whatsapp || newLead.phone,
+            company: newLead.company,
+            stage: newLead.status,
+            value: String(newLead.value || 0),
+            source: newLead.source || 'CRM Quick Add',
+            owner: newLead.owner,
+          }).catch(() => {});
           showToast(`Successfully created lead "${newLead.name}".`);
           setIsLeadModalOpen(false);
           setActiveNav('Leads');
