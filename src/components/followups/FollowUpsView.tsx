@@ -46,13 +46,36 @@ type FollowUpSortOption =
 
 type DateScopeTab = 'all' | 'today' | 'overdue' | 'upcoming' | 'completed';
 
+const normalizeFollowUpRecord = (raw: any): FollowUp => {
+  const scheduledDate = raw?.scheduledDate || raw?.dueDate || '';
+  const scheduledTime = raw?.scheduledTime || raw?.dueTime || '11:00 AM';
+  return {
+    ...raw,
+    id: String(raw?.id || `fu-${Date.now()}`),
+    contact: String(raw?.contact || raw?.contactName || raw?.title || 'CRM Contact'),
+    company: String(raw?.company || 'CRM'),
+    nextFollowUp: String(
+      raw?.nextFollowUp ||
+        (scheduledDate ? `${scheduledDate}, ${scheduledTime}` : 'Scheduled')
+    ),
+    type: raw?.type || 'Call',
+    owner: String(raw?.owner || 'Team'),
+    dealName: raw?.dealName || raw?.title || undefined,
+    scheduledDate,
+    scheduledTime,
+    priority: raw?.priority || 'Medium',
+    status: raw?.status || 'Scheduled',
+    notes: raw?.notes || '',
+  };
+};
+
 const STORAGE_FOLLOWUPS_KEY = 'ozostack_followups_v2';
 const loadFollowUpsFromStorage = (): FollowUp[] => {
   try {
     const saved = localStorage.getItem(STORAGE_FOLLOWUPS_KEY);
     if (saved !== null) {
       const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed)) return parsed.filter(Boolean).map(normalizeFollowUpRecord);
     }
   } catch {}
   return INITIAL_FOLLOW_UPS;
@@ -123,7 +146,7 @@ export const FollowUpsView: React.FC = () => {
   // Executive Metrics
   const metrics = useMemo(() => {
     const total = visibleFollowUps.length;
-    const todayStr = '2025-05-20'; // Mock date reference for consistency
+    const todayStr = new Date().toISOString().split('T')[0];
     const todayCount = visibleFollowUps.filter(
       (f) => f.scheduledDate === todayStr && f.status !== 'Completed' && f.status !== 'Cancelled'
     ).length;
@@ -146,14 +169,14 @@ export const FollowUpsView: React.FC = () => {
 
   // Filtered & Sorted Follow-ups
   const filteredFollowUps = useMemo(() => {
-    const todayStr = '2025-05-20';
+    const todayStr = new Date().toISOString().split('T')[0];
 
     const list = visibleFollowUps.filter((f) => {
       const q = searchQuery.toLowerCase();
       const matchesSearch =
-        f.contact.toLowerCase().includes(q) ||
-        f.company.toLowerCase().includes(q) ||
-        f.owner.toLowerCase().includes(q) ||
+        (f.contact || '').toLowerCase().includes(q) ||
+        (f.company || '').toLowerCase().includes(q) ||
+        (f.owner || '').toLowerCase().includes(q) ||
         (f.dealName && f.dealName.toLowerCase().includes(q)) ||
         (f.notes && f.notes.toLowerCase().includes(q));
 

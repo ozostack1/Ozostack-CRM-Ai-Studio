@@ -426,7 +426,10 @@ Reply Sender Name: ${smtpConfig.senderName || currentUser?.name || 'OzoStack Tea
         hotLeads: leads.filter((l) => l.priority === 'Hot').map((l) => `${l.name} (${l.company})`),
         recentLeads: leads.slice(0, 5).map((l) => `${l.name} - ${l.company} (${l.status}, ${currency.symbol}${l.value})`),
         openDealsCount: deals.filter((d: any) => d.stage !== 'Closed Won' && d.stage !== 'Closed Lost').length,
-        pendingFollowups: followups.filter((f: any) => f.status !== 'Completed').slice(0, 5).map((f: any) => `${f.title} (Due: ${f.dueDate})`),
+        pendingFollowups: followups
+          .filter((f: any) => f.status !== 'Completed')
+          .slice(0, 5)
+          .map((f: any) => `${f.contact || f.dealName || f.title || 'Follow-up'} (${f.company || ''}, Due: ${f.scheduledDate || f.dueDate || 'Soon'})`),
         unpaidInvoices: invoices.filter((i: any) => i.status !== 'Paid').length,
         unreadEmailsCount: unreadInbox,
       };

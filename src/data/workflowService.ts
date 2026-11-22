@@ -448,16 +448,20 @@ export async function runSingleWorkflowRule(
       const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split('T')[0];
       const newFollowup = {
         id: `fu-wf-${Date.now()}`,
-        title: `Workflow Follow-up: ${payload.name} (${payload.company || 'Lead'})`,
-        contactName: payload.name,
+        contact: payload.name || 'CRM Contact',
         company: payload.company || 'CRM Lead',
+        nextFollowUp: `${tomorrow}, 11:00 AM`,
         type: 'Call',
-        dueDate: tomorrow,
-        dueTime: '11:00 AM',
+        owner: payload.owner || activeUser.name,
+        contactEmail: payload.email || '',
+        contactPhone: payload.phone || '',
+        dealName: `Workflow: ${rule.name}`,
+        scheduledDate: tomorrow,
+        scheduledTime: '11:00 AM',
         priority: 'High',
         status: 'Scheduled',
-        owner: payload.owner || activeUser.name,
         notes: `Auto-created by workflow "${rule.name}".`,
+        createdAt: new Date().toISOString().split('T')[0],
       };
       if (Array.isArray(existing)) {
         localStorage.setItem('ozostack_followups_v2', JSON.stringify([newFollowup, ...existing]));
