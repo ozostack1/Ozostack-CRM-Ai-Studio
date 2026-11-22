@@ -22,7 +22,6 @@ import { useAuth } from '../../context/AuthContext';
 import { useSystemCurrency } from '../../data/currencyService';
 import {
   useSmtpConfig,
-  useMailbox,
   sendDirectEmail,
 } from '../../data/emailService';
 import { sendDirectWhatsApp, useWhatsAppCenter } from '../../data/whatsappService';
@@ -42,8 +41,7 @@ export const AiAutomationView: React.FC = () => {
   const { theme } = useTheme();
   const { currentUser, scopeFilter } = useAuth();
   const currency = useSystemCurrency();
-  const { config: smtpConfig } = useSmtpConfig();
-  const { messages: mailboxMessages } = useMailbox();
+  const { config: smtpConfig, messages: mailboxMessages } = useSmtpConfig();
   const { config: waConfig } = useWhatsAppCenter();
   const isLight = theme === 'white-sky';
 
