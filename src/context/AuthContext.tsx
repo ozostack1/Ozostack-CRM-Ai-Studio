@@ -213,6 +213,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         key === 'Email' ||
         key === 'WhatsApp' ||
         key === 'Workflows' ||
+        key === 'AI Automation' ||
         isSuperAdmin
       )
         return true;

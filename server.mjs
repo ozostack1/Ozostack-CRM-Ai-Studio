@@ -2288,6 +2288,98 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // ========================================================================
+    // Google Gemini AI Endpoints (Server-Side Free Tier Key + Optional Override)
+    // ========================================================================
+    if (pathname === '/api/ai/status' && req.method === 'GET') {
+      const configured = Boolean(String(process.env.GEMINI_API_KEY || '').trim());
+      sendJson(res, 200, {
+        ok: true,
+        configured,
+        model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+      });
+      return;
+    }
+
+    if (pathname === '/api/ai/generate' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const apiKey = String(body.userApiKey || process.env.GEMINI_API_KEY || '').trim();
+      const prompt = String(body.prompt || '').trim();
+      const systemInstruction = String(body.systemInstruction || '').trim();
+      const jsonMode = Boolean(body.jsonMode);
+      const preferredModel = String(
+        body.model || process.env.GEMINI_MODEL || 'gemini-2.5-flash'
+      ).trim();
+
+      if (!apiKey) {
+        sendJson(res, 200, {
+          ok: false,
+          error: 'Gemini API key is not configured on the server yet.',
+        });
+        return;
+      }
+
+      if (!prompt) {
+        sendJson(res, 400, { ok: false, error: 'Prompt is required.' });
+        return;
+      }
+
+      const modelsToTry = [preferredModel, 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(
+        (v, i, arr) => v && arr.indexOf(v) === i
+      );
+
+      let lastErr = 'Gemini API request failed.';
+      for (const modelName of modelsToTry) {
+        try {
+          const payload = {
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: jsonMode ? 0.2 : 0.7,
+              ...(jsonMode ? { responseMimeType: 'application/json' } : {}),
+            },
+          };
+          if (systemInstruction) {
+            payload.systemInstruction = { parts: [{ text: systemInstruction }] };
+          }
+
+          const gRes = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+              modelName
+            )}:generateContent?key=${encodeURIComponent(apiKey)}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            }
+          );
+
+          const gData = await gRes.json().catch(() => ({}));
+          if (gRes.ok) {
+            const parts = gData?.candidates?.[0]?.content?.parts || [];
+            const text = parts
+              .map((p) => p?.text || '')
+              .join('')
+              .trim();
+            if (text) {
+              sendJson(res, 200, { ok: true, text, model: modelName });
+              return;
+            }
+          }
+
+          lastErr = gData?.error?.message || `HTTP ${gRes.status} from ${modelName}`;
+          // Retry next model only if model not found / overloaded
+          if (gRes.status !== 404 && gRes.status !== 503 && gRes.status !== 429) {
+            break;
+          }
+        } catch (err) {
+          lastErr = err?.message || 'Network error calling Gemini API.';
+        }
+      }
+
+      sendJson(res, 200, { ok: false, error: lastErr });
+      return;
+    }
+
     // Fetch all synced CRM key-value pairs from MongoDB
     if (pathname === '/api/crm-state' && req.method === 'GET') {
       const db = await getDb();

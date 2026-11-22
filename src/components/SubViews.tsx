@@ -43,6 +43,7 @@ import { TemplatesView } from './templates/TemplatesView';
 import { EmailCenterView } from './email/EmailCenterView';
 import { WhatsAppCenterView } from './whatsapp/WhatsAppCenterView';
 import { WorkflowsView } from './workflows/WorkflowsView';
+import { AiAutomationView } from './ai/AiAutomationView';
 import { PersonalNotesTodosView } from './personal/PersonalNotesTodosView';
 
 interface SubViewsProps {
@@ -181,8 +182,12 @@ export const SubViews: React.FC<SubViewsProps> = ({ viewName }) => {
     return <WhatsAppCenterView />;
   }
 
-  if (viewName === 'Workflows' || viewName === 'AI Automation') {
+  if (viewName === 'Workflows') {
     return <WorkflowsView />;
+  }
+
+  if (viewName === 'AI Automation') {
+    return <AiAutomationView />;
   }
 
   if (
