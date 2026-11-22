@@ -84,7 +84,7 @@ export const WorkflowsView: React.FC = () => {
   const { currentUser } = useAuth();
   const { config: smtpConfig } = useSmtpConfig();
   const { config: waConfig } = useWhatsAppCenter();
-  const { workflows, webhookSources, logs, refresh } = useWorkflowsCenter();
+  const { workflows, webhookSources, logs, refresh } = useWorkflowsCenter(currentUser?.id);
   const isLight = theme === 'white-sky';
 
   const [activeTab, setActiveTab] = useState<'workflows' | 'webhooks' | 'logs'>('workflows');

@@ -2052,7 +2052,7 @@ const server = http.createServer(async (req, res) => {
 
       const db = await getDb();
       let sourceCfg = null;
-      let ownerName = 'Sayed';
+      let ownerName = userId;
 
       if (db) {
         try {
@@ -2078,8 +2078,8 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
-      if (sourceCfg && sourceCfg.token && token && sourceCfg.token !== token) {
-        sendJson(res, 403, { ok: false, error: 'Invalid webhook token.' });
+      if (sourceCfg && sourceCfg.token && sourceCfg.token !== token) {
+        sendJson(res, 403, { ok: false, error: 'Invalid or missing webhook token.' });
         return;
       }
 

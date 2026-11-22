@@ -100,6 +100,24 @@ export const AiAutomationView: React.FC = () => {
     setTimeout(() => setBanner((prev) => (prev?.text === text ? null : prev)), 6000);
   };
 
+  // Reset all in-memory AI state & reload per-user custom key whenever the active user changes
+  useEffect(() => {
+    try {
+      setCustomApiKey(localStorage.getItem(AI_USER_KEY_STORAGE(userId)) || '');
+    } catch {
+      setCustomApiKey('');
+    }
+    setAiScores({});
+    setScoresApplied(false);
+    setSelectedLeadId('');
+    setSelectedEmailId('');
+    setGenSubject('');
+    setGenBody('');
+    setReplyDraft('');
+    setBriefingText('');
+    setLeadsTick((t) => t + 1);
+  }, [userId]);
+
   // Check Server Gemini API status on mount
   useEffect(() => {
     fetch('/api/ai/status', { cache: 'no-store' })
@@ -391,9 +409,15 @@ Reply Sender Name: ${smtpConfig.senderName || currentUser?.name || 'OzoStack Tea
         }
       };
 
-      const deals = readList('ozostack_deals_v2');
-      const followups = readList('ozostack_followups_v2');
-      const invoices = readList('ozostack_invoices_v1');
+      const deals = scopeFilter(readList('ozostack_deals_v2'), (d: any) => ({
+        owner: d.owner,
+      }));
+      const followups = scopeFilter(readList('ozostack_followups_v2'), (f: any) => ({
+        owner: f.owner,
+      }));
+      const invoices = scopeFilter(readList('ozostack_invoices_v1'), (i: any) => ({
+        owner: i.owner || i.createdBy,
+      }));
       const unreadInbox = inboxEmails.filter((e) => !e.read).length;
 
       const summaryData = {

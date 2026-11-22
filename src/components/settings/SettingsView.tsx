@@ -282,7 +282,11 @@ export const SettingsView: React.FC = () => {
             (k.startsWith('ozostack_mailbox_') ||
               k.startsWith('ozostack_sentlog_') ||
               k.startsWith('ozostack_smtp_') ||
-              k.startsWith('ozostack_wa_'))
+              k.startsWith('ozostack_wa_') ||
+              k.startsWith('ozostack_workflows_') ||
+              k.startsWith('ozostack_webhook_sources_') ||
+              k.startsWith('ozostack_workflow_logs_') ||
+              k.startsWith('ozostack_gemini_key_'))
           ) {
             localStorage.removeItem(k);
           }

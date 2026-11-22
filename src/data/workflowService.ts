@@ -537,18 +537,18 @@ export async function triggerCrmWorkflow(
   }
 }
 
-export function useWorkflowsCenter() {
-  const [workflows, setWorkflows] = useState<CrmWorkflowRule[]>(() => getWorkflows());
+export function useWorkflowsCenter(forUserId?: string) {
+  const [workflows, setWorkflows] = useState<CrmWorkflowRule[]>(() => getWorkflows(forUserId));
   const [webhookSources, setWebhookSources] = useState<ExternalWebhookSource[]>(() =>
-    getWebhookSources()
+    getWebhookSources(forUserId)
   );
-  const [logs, setLogs] = useState<WorkflowExecutionLog[]>(() => getWorkflowLogs());
+  const [logs, setLogs] = useState<WorkflowExecutionLog[]>(() => getWorkflowLogs(forUserId));
 
   const refresh = useCallback(() => {
-    setWorkflows(getWorkflows());
-    setWebhookSources(getWebhookSources());
-    setLogs(getWorkflowLogs());
-  }, []);
+    setWorkflows(getWorkflows(forUserId));
+    setWebhookSources(getWebhookSources(forUserId));
+    setLogs(getWorkflowLogs(forUserId));
+  }, [forUserId]);
 
   useEffect(() => {
     refresh();
@@ -560,7 +560,7 @@ export function useWorkflowsCenter() {
       window.removeEventListener('ozostack-crm-config-changed', refresh);
       window.removeEventListener('storage', refresh);
     };
-  }, [refresh]);
+  }, [refresh, forUserId]);
 
   return { workflows, webhookSources, logs, refresh };
 }
