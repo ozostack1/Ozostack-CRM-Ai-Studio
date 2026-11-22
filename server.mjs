@@ -2324,9 +2324,13 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const modelsToTry = [preferredModel, 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(
-        (v, i, arr) => v && arr.indexOf(v) === i
-      );
+      const modelsToTry = [
+        preferredModel,
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-flash-latest',
+        'gemini-flash-lite-latest',
+      ].filter((v, i, arr) => v && arr.indexOf(v) === i);
 
       let lastErr = 'Gemini API request failed.';
       for (const modelName of modelsToTry) {
