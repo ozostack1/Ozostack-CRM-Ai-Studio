@@ -39,6 +39,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useCrmConfig } from '../../data/crmConfig';
 import { useSystemCurrency } from '../../data/currencyService';
 import { addNotification } from '../../data/notificationService';
+import { triggerCrmWorkflow } from '../../data/workflowService';
 import { INITIAL_LEADS } from '../../data/mockData';
 import { LeadModal } from './LeadModal';
 import { LeadActionModal, ContactActionType } from './LeadActionModal';
@@ -308,6 +309,18 @@ export const LeadsView: React.FC = () => {
         priority: 'high',
         timeAgo: 'Just now',
       });
+
+      // Automatically trigger active "New Lead Created" CRM workflows (Auto Email / WhatsApp / Follow-up)
+      triggerCrmWorkflow('lead_created', {
+        name: lead.name,
+        email: lead.email,
+        phone: lead.whatsapp || lead.phone,
+        company: lead.company,
+        stage: lead.status,
+        value: `${currency.symbol}${lead.value.toLocaleString()}`,
+        source: lead.source || 'CRM Lead',
+        owner: lead.owner,
+      }).catch(() => {});
     }
   };
 
@@ -398,6 +411,18 @@ export const LeadsView: React.FC = () => {
           stage: newStatus,
         });
       }
+
+      // Automatically trigger active "Lead Stage Changed" CRM workflows
+      triggerCrmWorkflow('lead_stage_changed', {
+        name: lead.name,
+        email: lead.email,
+        phone: lead.whatsapp || lead.phone,
+        company: lead.company,
+        stage: newStatus,
+        value: `${currency.symbol}${lead.value.toLocaleString()}`,
+        source: lead.source || 'CRM Stage Change',
+        owner: lead.owner,
+      }).catch(() => {});
     }
   };
 

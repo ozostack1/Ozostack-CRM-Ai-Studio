@@ -1979,6 +1979,315 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // ========================================================================
+    // External Lead Webhook Receiver (JustDial, IndiaMART, Facebook, Website)
+    // Supports BOTH GET query params (JustDial) and POST JSON/Form payloads
+    // ========================================================================
+    if (pathname === '/api/webhooks/lead' && (req.method === 'POST' || req.method === 'GET')) {
+      let body = {};
+      if (req.method === 'POST') {
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          body = {};
+        }
+      }
+      const qp = Object.fromEntries(parsedUrl.searchParams.entries());
+      const merged = { ...qp, ...(body?.RESPONSE || body?.data || body || {}) };
+
+      const sourceRaw = String(qp.source || merged.source || 'website').trim().toLowerCase();
+      const userId = String(qp.userId || merged.userId || '').trim();
+      const token = String(qp.token || merged.token || '').trim();
+      const isTest = Boolean(merged.isTest === true || qp.isTest === 'true');
+
+      if (!userId) {
+        sendJson(res, 400, { ok: false, error: 'userId query parameter is required.' });
+        return;
+      }
+
+      const sourceLabelMap = {
+        justdial: 'JustDial',
+        indiamart: 'IndiaMART',
+        facebook: 'Facebook Ads',
+        website: 'Website',
+      };
+      const sourceLabel = sourceLabelMap[sourceRaw] || 'Website';
+
+      // Extract standardized lead fields across JustDial, IndiaMART, Facebook & Website formats
+      const leadName = String(
+        merged.name ||
+          merged.SENDER_NAME ||
+          merged.full_name ||
+          merged.contact_name ||
+          merged.prefix ||
+          `${sourceLabel} Lead`
+      ).trim();
+      const leadPhone = String(
+        merged.mobile ||
+          merged.phone ||
+          merged.SENDER_MOBILE ||
+          merged.phone_number ||
+          merged.phone1 ||
+          ''
+      ).trim();
+      const leadEmail = String(
+        merged.email || merged.SENDER_EMAIL || merged.email_id || ''
+      ).trim();
+      const leadCompany = String(
+        merged.company ||
+          merged.SENDER_COMPANY ||
+          merged.company_name ||
+          merged.category ||
+          merged.QUERY_PRODUCT_NAME ||
+          merged.city ||
+          sourceLabel
+      ).trim();
+      const leadNotes = String(
+        merged.message ||
+          merged.QUERY_MESSAGE ||
+          merged.area ||
+          merged.city ||
+          `Captured automatically via ${sourceLabel} webhook`
+      ).trim();
+
+      const db = await getDb();
+      let sourceCfg = null;
+      let ownerName = 'Sayed';
+
+      if (db) {
+        try {
+          const col = db.collection(KV_COLLECTION);
+          // Resolve owner name from auth store
+          const authDoc = await col.findOne({ _id: 'ozo-auth-store-v5' });
+          if (authDoc?.value) {
+            const parsedAuth = JSON.parse(authDoc.value);
+            const foundUser = (parsedAuth?.users || []).find((u) => u.id === userId);
+            if (foundUser?.name) ownerName = foundUser.name;
+          }
+
+          // Load user's external webhook source configuration
+          const srcDoc = await col.findOne({ _id: `ozostack_webhook_sources_user_v1_${userId}` });
+          if (srcDoc?.value) {
+            const list = JSON.parse(srcDoc.value);
+            if (Array.isArray(list)) {
+              sourceCfg = list.find((s) => s.id === sourceRaw) || null;
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+
+      if (sourceCfg && sourceCfg.token && token && sourceCfg.token !== token) {
+        sendJson(res, 403, { ok: false, error: 'Invalid webhook token.' });
+        return;
+      }
+
+      if (sourceCfg && !sourceCfg.enabled && !isTest) {
+        sendJson(res, 200, {
+          ok: true,
+          ignored: true,
+          message: `${sourceLabel} webhook is currently turned OFF in CRM Workflows. Turn it ON when ready.`,
+        });
+        return;
+      }
+
+      const nowIso = new Date().toISOString();
+      const leadId = `lead-wh-${Date.now()}`;
+
+      // 1. Auto Create Lead in MongoDB ozostack_leads_v2
+      const shouldCreateLead = sourceCfg ? sourceCfg.autoCreateLead !== false : true;
+      if (db && shouldCreateLead) {
+        try {
+          const col = db.collection(KV_COLLECTION);
+          const leadsDoc = await col.findOne({ _id: 'ozostack_leads_v2' });
+          const existingLeads = leadsDoc?.value ? JSON.parse(leadsDoc.value) : [];
+          const normalizedPhone = normalizeWaDigits(leadPhone);
+          const newLead = {
+            id: leadId,
+            name: leadName,
+            title: sourceLabel + ' Inquiry',
+            company: leadCompany,
+            email: leadEmail || 'no-email@lead.local',
+            phone: leadPhone || '+91 00000 00000',
+            whatsapp: normalizedPhone ? `+${normalizedPhone}` : leadPhone,
+            value: 25000,
+            status: 'New Lead',
+            priority: 'Hot',
+            source: sourceLabel,
+            owner: ownerName,
+            score: 82,
+            createdAt: nowIso.split('T')[0],
+            lastActivity: 'Just now',
+            notes: leadNotes,
+          };
+          const nextLeads = Array.isArray(existingLeads) ? [newLead, ...existingLeads] : [newLead];
+          await col.updateOne(
+            { _id: 'ozostack_leads_v2' },
+            { $set: { value: JSON.stringify(nextLeads), updatedAt: nowIso } },
+            { upsert: true }
+          );
+        } catch {
+          /* ignore */
+        }
+      }
+
+      const interpolate = (tpl) => {
+        const firstName = leadName.split(' ')[0] || 'there';
+        return String(tpl || '')
+          .replace(/\{firstName\}/g, firstName)
+          .replace(/\{name\}/g, leadName)
+          .replace(/\{company\}/g, leadCompany)
+          .replace(/\{source\}/g, sourceLabel)
+          .replace(/\{owner\}/g, ownerName);
+      };
+
+      // 2. Auto Send Welcome Email via user's configured SMTP
+      let emailSent = false;
+      let emailNote = 'Skipped';
+      const shouldEmail = sourceCfg ? Boolean(sourceCfg.autoEmail) : true;
+      if (shouldEmail && leadEmail && leadEmail.includes('@') && !leadEmail.endsWith('.local')) {
+        const cfg = await resolveSmtpConfig(null, userId);
+        if (cfg.senderEmail && !isPlaceholderPassword(cfg.password)) {
+          try {
+            const { transporter, authUser } = buildNodemailerTransport(cfg);
+            const fromName = (cfg.senderName || ownerName || 'OzoStack').replace(/"/g, '');
+            const fromEmail = (cfg.senderEmail || authUser).trim();
+            const subject = interpolate(
+              sourceCfg?.emailSubject || `Thank you for your ${sourceLabel} inquiry — OzoStack`
+            );
+            const text = interpolate(
+              sourceCfg?.emailBody ||
+                `Hi {firstName},\n\nThank you for connecting with us via {source} regarding {company}. Our team will reach out shortly.\n\nRegards,\n{owner}`
+            );
+            await transporter.sendMail({
+              from: `"${fromName}" <${fromEmail}>`,
+              to: leadEmail,
+              replyTo: cfg.replyToEmail || fromEmail,
+              subject,
+              text,
+              html: `<div style="font-family:Inter,Arial,sans-serif;font-size:14px;line-height:1.6;color:#0f172a;white-space:pre-wrap;">${escapeHtml(
+                text
+              )}</div>`,
+            });
+            emailSent = true;
+            emailNote = 'Sent';
+          } catch (mailErr) {
+            emailNote = `Failed (${mailErr?.message || 'SMTP error'})`;
+          }
+        } else {
+          emailNote = 'SMTP not configured';
+        }
+      }
+
+      // 3. Auto Send Welcome WhatsApp (if enabled AND QR session or Meta Cloud API is active)
+      let whatsappSent = false;
+      let whatsappNote = 'Skipped';
+      const shouldWa = sourceCfg ? Boolean(sourceCfg.autoWhatsApp) : false;
+      if (shouldWa && leadPhone) {
+        const digits = normalizeWaDigits(leadPhone);
+        const waText = interpolate(
+          sourceCfg?.whatsappBody ||
+            `Hi {firstName}, thanks for your ${sourceLabel} inquiry regarding {company}! Our team will connect shortly.`
+        );
+        const session = getOrCreateWaSessionEntry(userId);
+        if (session && session.status === 'connected' && session.sock && digits) {
+          try {
+            await session.sock.sendMessage(`${digits}@s.whatsapp.net`, { text: waText });
+            whatsappSent = true;
+            whatsappNote = 'Sent via QR';
+          } catch {
+            whatsappNote = 'Failed';
+          }
+        } else if (db && digits) {
+          try {
+            const waDoc = await db
+              .collection(KV_COLLECTION)
+              .findOne({ _id: `ozostack_wa_config_user_v1_${userId}` });
+            const waCfg = waDoc?.value ? JSON.parse(waDoc.value) : null;
+            if (waCfg?.metaPhoneNumberId && waCfg?.metaAccessToken) {
+              const gRes = await fetch(
+                `https://graph.facebook.com/v20.0/${encodeURIComponent(waCfg.metaPhoneNumberId)}/messages`,
+                {
+                  method: 'POST',
+                  headers: {
+                    Authorization: `Bearer ${waCfg.metaAccessToken}`,
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    messaging_product: 'whatsapp',
+                    recipient_type: 'individual',
+                    to: digits,
+                    type: 'text',
+                    text: { preview_url: false, body: waText },
+                  }),
+                }
+              );
+              if (gRes.ok) {
+                whatsappSent = true;
+                whatsappNote = 'Sent via Meta Cloud API';
+              } else {
+                whatsappNote = 'Meta Cloud API rejected';
+              }
+            } else {
+              whatsappNote = 'Not Linked (Meta API / QR pending)';
+            }
+          } catch {
+            whatsappNote = 'Not Linked (Meta API / QR pending)';
+          }
+        } else {
+          whatsappNote = 'Not Linked (Meta API / QR pending)';
+        }
+      }
+
+      // 4. Record Execution Log & Notification in MongoDB
+      if (db) {
+        try {
+          const col = db.collection(KV_COLLECTION);
+          const logKey = `ozostack_workflow_logs_user_v1_${userId}`;
+          const logDoc = await col.findOne({ _id: logKey });
+          const existingLogs = logDoc?.value ? JSON.parse(logDoc.value) : [];
+          const newLog = {
+            id: `wflog-wh-${Date.now()}`,
+            workflowName: `${sourceLabel} External Webhook`,
+            source: sourceLabel,
+            recipientName: leadName,
+            recipientEmail: leadEmail || undefined,
+            recipientPhone: leadPhone || undefined,
+            emailStatus: emailSent ? 'Sent' : emailNote === 'Skipped' ? 'Skipped' : 'Failed',
+            whatsappStatus: whatsappSent
+              ? 'Sent'
+              : whatsappNote.includes('Not Linked')
+              ? 'Not Linked'
+              : 'Skipped',
+            detail: `Lead created (${leadId}) · Email: ${emailNote} · WA: ${whatsappNote}`,
+            timestamp: nowIso,
+          };
+          const nextLogs = Array.isArray(existingLogs)
+            ? [newLog, ...existingLogs].slice(0, 100)
+            : [newLog];
+          await col.updateOne(
+            { _id: logKey },
+            { $set: { value: JSON.stringify(nextLogs), updatedAt: nowIso } },
+            { upsert: true }
+          );
+        } catch {
+          /* ignore */
+        }
+      }
+
+      sendJson(res, 200, {
+        ok: true,
+        leadId,
+        source: sourceLabel,
+        emailSent,
+        emailNote,
+        whatsappSent,
+        whatsappNote,
+      });
+      return;
+    }
+
     // Fetch all synced CRM key-value pairs from MongoDB
     if (pathname === '/api/crm-state' && req.method === 'GET') {
       const db = await getDb();
