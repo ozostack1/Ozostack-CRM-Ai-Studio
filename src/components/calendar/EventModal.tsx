@@ -126,8 +126,8 @@ export const EventModal: React.FC<EventModalProps> = ({
       setDate(initialDate || '2025-05-20');
       setStartTime('10:00 AM');
       setEndTime('11:00 AM');
-      setCompany(availableCompanies[0] || 'FinEdge Systems');
-      setProject(availableProjects[0] || 'PCI-DSS Banking API Gateway');
+      setCompany(availableCompanies[0] || '');
+      setProject(availableProjects[0] || 'Others');
       setStatus('Scheduled');
       setPriority('Medium');
       setLocation('Google Meet');
@@ -582,7 +582,7 @@ export const EventModal: React.FC<EventModalProps> = ({
                     type="text"
                     value={project}
                     onChange={(e) => setProject(e.target.value)}
-                    placeholder="e.g. PCI-DSS Banking API Gateway"
+                    placeholder="e.g. Project Name"
                     className={`w-full px-3 py-2 text-xs rounded-xl border outline-none font-medium ${
                       isLight
                         ? 'bg-sky-50/30 border-sky-200 text-slate-800 focus:border-sky-500'

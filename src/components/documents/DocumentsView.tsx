@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { DocumentItem, DocumentFolder, DocumentFileType } from '../../types/crm';
 import { INITIAL_DOCUMENT_FOLDERS, INITIAL_DOCUMENTS, INITIAL_PROJECTS } from '../../data/mockData';
+import { getActualSavedProjects, getLinkedProjectOptions } from '../../data/projectDirectory';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { DocumentDetailsDrawer } from './DocumentDetailsDrawer';
@@ -984,8 +985,8 @@ export const DocumentsView: React.FC = () => {
         onClose={() => setIsUploadModalOpen(false)}
         onUpload={handleUploadNewDoc}
         availableFolders={computedFolders}
-        availableClients={['FinEdge Systems', 'TechVision Inc.', 'SwiftRetail Global', 'DLF Limited', 'Mahindra Housing']}
-        availableProjects={INITIAL_PROJECTS.map((p) => p.name)}
+        availableClients={Array.from(new Set(getActualSavedProjects().map((p) => p.client).filter(Boolean)))}
+        availableProjects={getLinkedProjectOptions()}
         defaultFolderId={selectedFolderId !== 'all' ? selectedFolderId : undefined}
       />
 

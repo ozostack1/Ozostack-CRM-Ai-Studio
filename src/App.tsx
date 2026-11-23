@@ -23,6 +23,7 @@ import { TodoModal, NoteModal } from './components/personal/PersonalNotesTodosVi
 import { PersonalTodo, PersonalNote } from './types/personalNotesTodos';
 import { loadAllTodos, saveAllTodos, loadAllNotes, saveAllNotes } from './data/personalNotesTodosData';
 import { triggerCrmWorkflow } from './data/workflowService';
+import { getActualSavedProjects, getLinkedProjectOptions } from './data/projectDirectory';
 
 import {
   Lead,
@@ -306,7 +307,7 @@ function DashboardContent() {
       <TaskModal
         isOpen={isTaskModalOpen}
         onClose={() => setIsTaskModalOpen(false)}
-        availableProjects={INITIAL_PROJECTS.map((p) => p.name)}
+        availableProjects={getLinkedProjectOptions()}
         onSave={(newTask) => {
           try {
             const raw = localStorage.getItem('ozostack_tasks_v2');
@@ -328,7 +329,8 @@ function DashboardContent() {
       <EventModal
         isOpen={isEventModalOpen}
         onClose={() => setIsEventModalOpen(false)}
-        initialDate="2025-05-20"
+        initialDate={new Date().toISOString().split('T')[0]}
+        availableProjects={getLinkedProjectOptions()}
         onSave={(newEvent) => {
           try {
             const raw = localStorage.getItem('ozostack_calendar_events_v3');
@@ -348,11 +350,14 @@ function DashboardContent() {
       <TimeEntryModal
         isOpen={isTimeModalOpen}
         onClose={() => setIsTimeModalOpen(false)}
-        availableProjects={INITIAL_PROJECTS.map((p) => ({
-          id: p.id,
-          name: p.name,
-          client: p.client,
-        }))}
+        availableProjects={[
+          ...getActualSavedProjects().map((p) => ({
+            id: p.id,
+            name: p.name,
+            client: p.client,
+          })),
+          { id: 'others', name: 'Others', client: '' },
+        ]}
         onSave={(newEntry) => {
           try {
             const raw = localStorage.getItem('ozostack_time_entries_v1');
@@ -372,8 +377,8 @@ function DashboardContent() {
         isOpen={isDocModalOpen}
         onClose={() => setIsDocModalOpen(false)}
         availableFolders={INITIAL_DOCUMENT_FOLDERS}
-        availableClients={['FinEdge Systems', 'TechVision Inc.', 'SwiftRetail Global', 'DLF Limited', 'Mahindra Housing']}
-        availableProjects={INITIAL_PROJECTS.map((p) => p.name)}
+        availableClients={Array.from(new Set(getActualSavedProjects().map((p) => p.client).filter(Boolean)))}
+        availableProjects={getLinkedProjectOptions()}
         onUpload={(newDoc) => {
           try {
             const raw = localStorage.getItem('ozostack_documents_v2');

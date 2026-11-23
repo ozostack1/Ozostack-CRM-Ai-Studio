@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import { TimeEntry, TimeEntryApprovalStatus, TaskItem, Project } from '../../types/crm';
 import { INITIAL_TIME_ENTRIES, INITIAL_PROJECTS, INITIAL_TASKS } from '../../data/mockData';
+import { getActualSavedProjects } from '../../data/projectDirectory';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useSystemCurrency } from '../../data/currencyService';
@@ -128,7 +129,7 @@ export const TimeTrackingView: React.FC = () => {
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [timerSeconds, setTimerSeconds] = useState(0);
   const [timerDescription, setTimerDescription] = useState('');
-  const [timerProject, setTimerProject] = useState(INITIAL_PROJECTS[0]?.name || 'PCI-DSS Banking API Gateway');
+  const [timerProject, setTimerProject] = useState(getActualSavedProjects()[0]?.name || 'Others');
   const [timerTask, setTimerTask] = useState(INITIAL_TASKS[0]?.title || 'OAuth2 Multi-Factor Authentication Flow');
   const [timerMember, setTimerMember] = useState('Sayed (CEO)');
   const [timerIsBillable, setTimerIsBillable] = useState(true);
@@ -175,7 +176,7 @@ export const TimeTrackingView: React.FC = () => {
     const rate = memberObj?.rate || 140;
     const billableAmount = timerIsBillable ? Math.round(hours * rate * 100) / 100 : 0;
 
-    const matchedProj = INITIAL_PROJECTS.find((p) => p.name === timerProject);
+    const matchedProj = getActualSavedProjects().find((p) => p.name === timerProject);
     const clientName = matchedProj?.client || 'Enterprise Client';
 
     const finalTaskTitle = timerTask.trim() || timerDescription.trim() || 'Technical Architecture & Execution';
@@ -500,7 +501,7 @@ export const TimeTrackingView: React.FC = () => {
                   isLight ? 'bg-white border-sky-200 text-slate-700' : 'bg-slate-800 border-slate-700 text-slate-200'
                 }`}
               >
-                {INITIAL_PROJECTS.map((p) => (
+                {[...getActualSavedProjects(), { id: 'others', name: 'Others', client: '' }].map((p) => (
                   <option key={p.id} value={p.name}>
                     {p.name}
                   </option>
@@ -1205,7 +1206,7 @@ export const TimeTrackingView: React.FC = () => {
       {/* 7. VIEW 3: PROJECT BUDGET & BURN ANALYTICS */}
       {viewMode === 'project_burn' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {INITIAL_PROJECTS.map((proj) => {
+          {getActualSavedProjects().map((proj) => {
             const projEntries = entries.filter((e) => e.projectName === proj.name);
             const totalHours = Math.round(projEntries.reduce((acc, c) => acc + c.durationHours, 0) * 10) / 10;
             const totalRealizedValue = projEntries.reduce((acc, c) => acc + c.billableAmount, 0);
@@ -1309,7 +1310,10 @@ export const TimeTrackingView: React.FC = () => {
         onClose={() => setIsModalOpen(false)}
         onSave={handleSaveEntry}
         entryToEdit={entryToEdit}
-        availableProjects={INITIAL_PROJECTS.map((p) => ({ id: p.id, name: p.name, client: p.client }))}
+        availableProjects={[
+          ...getActualSavedProjects().map((p) => ({ id: p.id, name: p.name, client: p.client })),
+          { id: 'others', name: 'Others', client: '' },
+        ]}
         availableTasks={INITIAL_TASKS.map((t) => ({ id: t.id, title: t.title, project: t.project }))}
         availableMembers={DEFAULT_MEMBERS}
       />

@@ -22,6 +22,7 @@ import {
   TaskSubtask,
 } from '../../types/crm';
 import { useTheme } from '../../context/ThemeContext';
+import { getActualSavedProjects, getLinkedProjectOptions } from '../../data/projectDirectory';
 
 interface TaskModalProps {
   isOpen: boolean;
@@ -91,10 +92,12 @@ export const TaskModal: React.FC<TaskModalProps> = ({
       setTagsInput(taskToEdit.tags ? taskToEdit.tags.join(', ') : '');
       setSubtasks(taskToEdit.subtasks || []);
     } else {
+      const savedProjects = getActualSavedProjects();
+      const firstActual = savedProjects[0];
       setTitle('');
-      setProject(availableProjects[0] || 'PCI-DSS Banking API Gateway');
-      setClient('FinEdge Systems');
-      setAssignee(availableAssignees[0] || 'Amit Kumar');
+      setProject(firstActual?.name || 'Others');
+      setClient(firstActual?.client || '');
+      setAssignee(availableAssignees[0] || '');
       setStatus(defaultStatus);
       setPriority('Medium');
       setCategory('Backend');
@@ -102,14 +105,11 @@ export const TaskModal: React.FC<TaskModalProps> = ({
       setStartDate(today);
       const nextWeek = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
       setDueDate(nextWeek);
-      setEstimatedHours(16);
+      setEstimatedHours(8);
       setLoggedHours(0);
       setDescription('');
-      setTagsInput('API, Security');
-      setSubtasks([
-        { id: 'st-1', title: 'Technical architecture spec review', completed: true },
-        { id: 'st-2', title: 'Implementation & unit tests', completed: false },
-      ]);
+      setTagsInput('');
+      setSubtasks([]);
     }
     setNewSubtaskTitle('');
   }, [taskToEdit, isOpen, defaultStatus, availableProjects, availableAssignees]);
@@ -171,7 +171,8 @@ export const TaskModal: React.FC<TaskModalProps> = ({
     onClose();
   };
 
-  const allProjects = Array.from(new Set([...availableProjects, project])).filter(Boolean);
+  const savedProjects = getActualSavedProjects();
+  const allProjects = getLinkedProjectOptions(taskToEdit ? project : undefined);
   const allAssignees = Array.from(new Set([...availableAssignees, assignee])).filter(Boolean);
 
   return (
@@ -246,7 +247,16 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                 <select
                   required
                   value={project}
-                  onChange={(e) => setProject(e.target.value)}
+                  onChange={(e) => {
+                    const nextProj = e.target.value;
+                    setProject(nextProj);
+                    const matched = savedProjects.find((p) => p.name === nextProj);
+                    if (matched?.client) {
+                      setClient(matched.client);
+                    } else if (nextProj === 'Others') {
+                      setClient('');
+                    }
+                  }}
                   className={`w-full px-3 py-2 text-xs rounded-xl border outline-none font-medium cursor-pointer ${
                     isLight
                       ? 'bg-sky-50/30 border-sky-200 text-slate-800 focus:border-sky-500'
@@ -265,7 +275,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                   required
                   value={project}
                   onChange={(e) => setProject(e.target.value)}
-                  placeholder="e.g. PCI-DSS Banking API Gateway"
+                  placeholder="e.g. Enter project name"
                   className={`w-full px-3 py-2 text-xs rounded-xl border outline-none font-medium ${
                     isLight
                       ? 'bg-sky-50/30 border-sky-200 text-slate-800 focus:border-sky-500'
@@ -283,7 +293,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
                 type="text"
                 value={client}
                 onChange={(e) => setClient(e.target.value)}
-                placeholder="e.g. FinEdge Systems"
+                placeholder="e.g. Client Organization"
                 className={`w-full px-3 py-2 text-xs rounded-xl border outline-none font-medium ${
                   isLight
                     ? 'bg-sky-50/30 border-sky-200 text-slate-800 focus:border-sky-500'

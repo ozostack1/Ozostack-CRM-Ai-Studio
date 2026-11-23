@@ -91,7 +91,7 @@ export const TimeEntryModal: React.FC<TimeEntryModalProps> = ({
       setStatus(entryToEdit.status);
       setTagsInput(entryToEdit.tags ? entryToEdit.tags.join(', ') : '');
     } else {
-      const defaultProj = availableProjects[0]?.name || 'PCI-DSS Banking API Gateway';
+      const defaultProj = availableProjects[0]?.name || 'Others';
       setProjectName(defaultProj);
       const matching = availableTasks.filter(
         (t) => t.project.toLowerCase() === defaultProj.toLowerCase()

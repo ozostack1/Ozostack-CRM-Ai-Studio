@@ -32,8 +32,8 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
   onClose,
   onUpload,
   availableFolders,
-  availableClients = ['FinEdge Systems', 'TechVision Inc.', 'SwiftRetail Global', 'DLF Limited', 'Mahindra Housing'],
-  availableProjects = ['PCI-DSS Banking API Gateway', 'Cloud Migration & Microservices', 'Omnichannel POS Sync Engine'],
+  availableClients = [],
+  availableProjects = ['Others'],
   defaultFolderId,
 }) => {
   const { theme } = useTheme();
@@ -44,8 +44,8 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
   const [folderId, setFolderId] = useState(defaultFolderId || availableFolders[0]?.id || 'folder-3');
   const [fileType, setFileType] = useState<DocumentFileType>('code_zip');
   const [description, setDescription] = useState('');
-  const [client, setClient] = useState(availableClients[0] || 'FinEdge Systems');
-  const [project, setProject] = useState(availableProjects[0] || 'PCI-DSS Banking API Gateway');
+  const [client, setClient] = useState(availableClients[0] || '');
+  const [project, setProject] = useState(availableProjects[0] || 'Others');
   const [fileSizeFormatted, setFileSizeFormatted] = useState('18.5 MB');
   const [uploadedBy, setUploadedBy] = useState(currentUser?.name || 'Engineering Team');
   const [isStarred, setIsStarred] = useState(false);

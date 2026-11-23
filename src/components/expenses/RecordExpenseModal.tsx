@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useSystemCurrency } from '../../data/currencyService';
+import { getActualSavedProjects } from '../../data/projectDirectory';
 import {
   ExpenseItem,
   ExpenseCategory,
@@ -80,13 +81,10 @@ const COMMON_VENDORS = [
   'Stripe Payments',
 ];
 
-const PROJECT_OPTIONS = [
+const getProjectOptions = () => [
   { name: 'None / Internal OPEX', client: '' },
-  { name: 'GPU Latency Inference Pipeline', client: 'CloudNest AI' },
-  { name: 'Autonomous Route Dispatcher', client: 'FinEdge Systems' },
-  { name: 'Maritime Corridor Tracking Portal', client: 'TechVision Inc.' },
-  { name: 'Cloud Migration & Multi-Region', client: 'Gulf Cloud Services' },
-  { name: 'Smart Facility Telemetry Gateway', client: 'DLF Limited' },
+  ...getActualSavedProjects().map((p) => ({ name: p.name, client: p.client || '' })),
+  { name: 'Others', client: '' },
 ];
 
 export const RecordExpenseModal: React.FC<RecordExpenseModalProps> = ({
@@ -169,7 +167,7 @@ export const RecordExpenseModal: React.FC<RecordExpenseModalProps> = ({
 
   const handleProjectChange = (projName: string) => {
     setProject(projName);
-    const found = PROJECT_OPTIONS.find((p) => p.name === projName);
+    const found = getProjectOptions().find((p) => p.name === projName);
     if (found && found.client) {
       setClient(found.client);
       setIsBillableToClient(true);
@@ -448,7 +446,7 @@ export const RecordExpenseModal: React.FC<RecordExpenseModalProps> = ({
                   onChange={(e) => handleProjectChange(e.target.value)}
                   className={inputClass}
                 >
-                  {PROJECT_OPTIONS.map((p) => (
+                  {getProjectOptions().map((p) => (
                     <option key={p.name} value={p.name}>
                       {p.name}
                     </option>
