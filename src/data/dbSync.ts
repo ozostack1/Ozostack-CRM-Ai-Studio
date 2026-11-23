@@ -165,6 +165,58 @@ async function pullFromDatabase(notifyViews = false): Promise<boolean> {
   }
 }
 
+export async function flushDatabaseNow(): Promise<void> {
+  await flushToDatabase(false);
+}
+
+export function collectAllLocalSyncedSnapshot(): Record<string, string> {
+  return collectLocalSyncedItems();
+}
+
+/**
+ * Atomically replaces browser localStorage CRM keys with a restored backup snapshot
+ * WITHOUT triggering any dbSync write-backs or beforeunload flushes.
+ */
+export function applyRestoredSnapshotToLocalStorage(
+  restoredData: Record<string, string>
+): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  pendingUpdates = {};
+  pendingDeletes = new Set<string>();
+  isHydrating = true;
+
+  try {
+    // Clear existing synced CRM keys except auth store (unless backup includes it)
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const k = window.localStorage.key(i);
+      if (k && isSyncedKey(k) && k !== 'ozo-auth-store-v5') {
+        keysToRemove.push(k);
+      }
+    }
+    for (const k of keysToRemove) {
+      nativeRemoveItem.call(window.localStorage, k);
+    }
+
+    // Write every restored key directly into localStorage
+    for (const [k, v] of Object.entries(restoredData)) {
+      if (isSyncedKey(k) && typeof v === 'string') {
+        nativeSetItem.call(window.localStorage, k, v);
+      }
+    }
+  } finally {
+    // Keep isHydrating true until reload finishes so mounted effects cannot overwrite restored data
+    setTimeout(() => {
+      isHydrating = false;
+    }, 3000);
+  }
+}
+
 export async function initDatabaseSync(): Promise<void> {
   if (typeof window === 'undefined') return;
 

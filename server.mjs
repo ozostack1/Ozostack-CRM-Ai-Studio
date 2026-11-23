@@ -27,6 +27,7 @@ const DB_NAME = process.env.DB_NAME || 'ozo_one';
 
 const KV_COLLECTION = 'ozostack_crm_kv';
 const META_COLLECTION = 'ozostack_crm_meta';
+const BACKUP_COLLECTION = 'ozostack_crm_backups';
 const MIGRATION_ID = 'ozostack_ai_studio_migrated_v1';
 const SMTP_KV_KEY = 'ozostack_smtp_config_v1';
 
@@ -56,6 +57,7 @@ async function getDb() {
             if (
               col.name !== KV_COLLECTION &&
               col.name !== META_COLLECTION &&
+              col.name !== BACKUP_COLLECTION &&
               !col.name.startsWith('system.')
             ) {
               await db.collection(col.name).drop().catch(() => {});
@@ -2382,6 +2384,314 @@ const server = http.createServer(async (req, res) => {
 
       sendJson(res, 200, { ok: false, error: lastErr });
       return;
+    }
+
+    // ========================================================================
+    // Enterprise CRM Backup, Retention & Point-in-Time Restore Endpoints
+    // Stored in dedicated MongoDB collection 'ozostack_crm_backups' (isolated from wipe)
+    // ========================================================================
+
+    // 1. List all saved cloud backups (metadata only, auto-cleans expired backups)
+    if (pathname === '/api/backups' && req.method === 'GET') {
+      const db = await getDb();
+      if (!db) {
+        sendJson(res, 200, { ok: false, error: 'Database connection unavailable.', backups: [] });
+        return;
+      }
+      const col = db.collection(BACKUP_COLLECTION);
+      const nowIso = new Date().toISOString();
+      await col
+        .deleteMany({ expiresAt: { $ne: null, $lt: nowIso } })
+        .catch(() => {});
+
+      const docs = await col
+        .find({}, { projection: { data: 0 } })
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .toArray();
+
+      sendJson(res, 200, { ok: true, backups: docs });
+      return;
+    }
+
+    // 2. Create a new cloud backup snapshot (merges live MongoDB state + browser snapshot)
+    if (pathname === '/api/backups' && req.method === 'POST') {
+      const db = await getDb();
+      if (!db) {
+        sendJson(res, 500, { ok: false, error: 'Database connection unavailable.' });
+        return;
+      }
+      const body = await readJsonBody(req, 50 * 1024 * 1024);
+      const kvCol = db.collection(KV_COLLECTION);
+      const bkpCol = db.collection(BACKUP_COLLECTION);
+
+      // Start from MongoDB state, then overlay client's live snapshot (if provided) so nothing is missed
+      const snapshotData = {};
+      const kvDocs = await kvCol.find({}).toArray();
+      for (const doc of kvDocs) {
+        if (
+          doc &&
+          typeof doc._id === 'string' &&
+          !doc._id.startsWith('server_') &&
+          typeof doc.value === 'string'
+        ) {
+          snapshotData[doc._id] = doc.value;
+        }
+      }
+
+      const clientKeys = new Set();
+      if (body.data && typeof body.data === 'object') {
+        // When client passes filtered or complete snapshot, use client snapshot for those keys
+        for (const [k, v] of Object.entries(body.data)) {
+          if (typeof k === 'string' && !k.startsWith('server_') && typeof v === 'string') {
+            snapshotData[k] = v;
+            clientKeys.add(k);
+          }
+        }
+      }
+
+      // If a date period filter was requested, also filter MongoDB-only dated keys not already filtered by client
+      if (body.periodType && body.periodType !== 'all' && (body.fromDate || body.toDate)) {
+        const fromMs = body.fromDate
+          ? new Date(`${body.fromDate}T00:00:00.000Z`).getTime()
+          : -Infinity;
+        const toMs = body.toDate
+          ? new Date(`${body.toDate}T23:59:59.999Z`).getTime()
+          : Infinity;
+        if (!Number.isNaN(fromMs) && !Number.isNaN(toMs)) {
+          const SERVER_DATED_KEYS = new Set([
+            'ozostack_leads_v2',
+            'ozostack_deals_v2',
+            'ozostack_tasks_v2',
+            'ozostack_calendar_events_v3',
+            'ozostack_projects',
+            'ozostack_project_activities',
+            'ozostack_followups_v2',
+            'ozostack_invoices_v1',
+            'ozostack_proposals_v1',
+            'ozostack_quotations_v1',
+            'ozostack_contracts_v1',
+            'ozostack_expenses_v1',
+            'ozostack_expenses',
+            'ozostack_payments_v1',
+            'ozostack_payments',
+            'ozostack_documents_v2',
+            'ozostack_time_entries_v1',
+            'ozostack_attendance_v1',
+            'ozostack_leave_requests_v1',
+            'ozostack_revenue_transactions_v1',
+            'ozostack_payroll_records_v1',
+            'ozostack_pay_runs_v1',
+            'ozostack_reimbursements_v1',
+            'ozostack_notifications_v4',
+          ]);
+          for (const [k, rawVal] of Object.entries(snapshotData)) {
+            if (clientKeys.has(k)) continue;
+            const isDated =
+              SERVER_DATED_KEYS.has(k) ||
+              k.startsWith('ozostack_mailbox_') ||
+              k.startsWith('ozostack_sentlog_') ||
+              k.startsWith('ozostack_workflow_logs_');
+            if (!isDated) continue;
+            try {
+              const arr = JSON.parse(rawVal);
+              if (!Array.isArray(arr)) continue;
+              const filtered = arr.filter((item) => {
+                if (!item || typeof item !== 'object') return true;
+                const rawDate =
+                  item.createdAt ||
+                  item.date ||
+                  item.timestamp ||
+                  item.scheduledDate ||
+                  item.dueDate ||
+                  item.issueDate ||
+                  item.sentAt ||
+                  item.startDate ||
+                  item.updatedAt ||
+                  null;
+                if (!rawDate) return true;
+                const ms = new Date(String(rawDate)).getTime();
+                return Number.isNaN(ms) ? true : ms >= fromMs && ms <= toMs;
+              });
+              snapshotData[k] = JSON.stringify(filtered);
+            } catch {
+              /* preserve original value */
+            }
+          }
+        }
+      }
+
+      // Compute accurate record summary counts
+      const countArray = (key) => {
+        try {
+          const parsed = JSON.parse(snapshotData[key] || '[]');
+          return Array.isArray(parsed) ? parsed.length : 0;
+        } catch {
+          return 0;
+        }
+      };
+
+      const summary = {
+        leads: countArray('ozostack_leads_v2'),
+        deals: countArray('ozostack_deals_v2'),
+        projects: countArray('ozostack_projects'),
+        tasks: countArray('ozostack_tasks_v2'),
+        followups: countArray('ozostack_followups_v2'),
+        contacts: countArray('ozostack_contacts_v1'),
+        companies: countArray('ozostack_companies_v1'),
+        invoices: countArray('ozostack_invoices_v1'),
+        team: countArray('ozostack_team_members_v1'),
+        departments: countArray('ozostack_departments_v1'),
+        documents: countArray('ozostack_documents_v2'),
+        events: countArray('ozostack_calendar_events_v3'),
+      };
+
+      const now = new Date();
+      const nowIso = now.toISOString();
+      const retentionDays = Number(body.retentionDays);
+      const expiresAt =
+        retentionDays > 0
+          ? new Date(now.getTime() + retentionDays * 24 * 60 * 60 * 1000).toISOString()
+          : null;
+
+      const backupId = `bkp-${Date.now()}`;
+      const serialized = JSON.stringify(snapshotData);
+      const backupDoc = {
+        _id: backupId,
+        id: backupId,
+        name: String(body.name || `CRM Backup (${nowIso.slice(0, 10)})`).trim(),
+        periodType: String(body.periodType || 'all'),
+        periodLabel: String(body.periodLabel || 'All Time (Complete Exact Snapshot)'),
+        fromDate: body.fromDate || null,
+        toDate: body.toDate || null,
+        retentionDays: retentionDays > 0 ? retentionDays : 0,
+        retentionLabel: String(body.retentionLabel || 'Permanent (Never Expire)'),
+        expiresAt,
+        createdAt: nowIso,
+        createdBy: String(body.createdBy || 'Administrator'),
+        keyCount: Object.keys(snapshotData).length,
+        sizeBytes: Buffer.byteLength(serialized, 'utf8'),
+        summary,
+        data: snapshotData,
+      };
+
+      await bkpCol.insertOne(backupDoc);
+
+      // Keep metadata response lightweight
+      const { data: _omitted, ...metadata } = backupDoc;
+      sendJson(res, 200, { ok: true, backup: metadata });
+      return;
+    }
+
+    // 3. Restore CRM state atomically from a Cloud Backup ID or Uploaded Backup JSON
+    if (pathname === '/api/backups/restore' && req.method === 'POST') {
+      const db = await getDb();
+      if (!db) {
+        sendJson(res, 500, { ok: false, error: 'Database connection unavailable.' });
+        return;
+      }
+      const body = await readJsonBody(req, 50 * 1024 * 1024);
+      const kvCol = db.collection(KV_COLLECTION);
+      const bkpCol = db.collection(BACKUP_COLLECTION);
+
+      let snapshotData = null;
+      let restoredName = 'Uploaded Backup File';
+
+      if (body.backupId) {
+        const doc = await bkpCol.findOne({ _id: String(body.backupId) });
+        if (!doc || !doc.data || typeof doc.data !== 'object') {
+          sendJson(res, 404, { ok: false, error: 'Backup snapshot not found.' });
+          return;
+        }
+        snapshotData = doc.data;
+        restoredName = doc.name || doc.id;
+      } else if (body.uploadedData && typeof body.uploadedData === 'object') {
+        snapshotData = body.uploadedData;
+        restoredName = String(body.name || 'Uploaded Backup File');
+      } else {
+        sendJson(res, 400, { ok: false, error: 'backupId or uploadedData is required.' });
+        return;
+      }
+
+      // Filter valid CRM keys only (never touch server_* internal keys)
+      const validEntries = Object.entries(snapshotData).filter(
+        ([k, v]) =>
+          typeof k === 'string' &&
+          !k.startsWith('server_') &&
+          (k.startsWith('ozostack_') || k.startsWith('ozo-auth-store-')) &&
+          typeof v === 'string'
+      );
+
+      if (validEntries.length === 0) {
+        sendJson(res, 400, { ok: false, error: 'Backup file contains no valid CRM data keys.' });
+        return;
+      }
+
+      const nowIso = new Date().toISOString();
+      const restoredKeySet = new Set(validEntries.map(([k]) => k));
+
+      // Remove stale CRM keys not present in the backup (preserve server_* and auth store if not in backup)
+      const existingDocs = await kvCol.find({}, { projection: { _id: 1 } }).toArray();
+      const keysToDelete = existingDocs
+        .map((d) => String(d._id))
+        .filter(
+          (k) =>
+            !k.startsWith('server_') &&
+            k !== 'ozo-auth-store-v5' &&
+            !restoredKeySet.has(k)
+        );
+
+      if (keysToDelete.length > 0) {
+        await kvCol.deleteMany({ _id: { $in: keysToDelete } });
+      }
+
+      const ops = validEntries.map(([key, value]) => ({
+        updateOne: {
+          filter: { _id: key },
+          update: { $set: { value, updatedAt: nowIso } },
+          upsert: true,
+        },
+      }));
+
+      if (ops.length > 0) {
+        await kvCol.bulkWrite(ops, { ordered: false });
+      }
+
+      const cleanDataObj = Object.fromEntries(validEntries);
+      sendJson(res, 200, {
+        ok: true,
+        backupName: restoredName,
+        restoredKeysCount: validEntries.length,
+        data: cleanDataObj,
+      });
+      return;
+    }
+
+    // 4. Download or Delete a specific Backup by ID (/api/backups/:id)
+    if (pathname.startsWith('/api/backups/') && pathname.length > '/api/backups/'.length) {
+      const backupId = decodeURIComponent(pathname.slice('/api/backups/'.length));
+      const db = await getDb();
+      if (!db) {
+        sendJson(res, 500, { ok: false, error: 'Database connection unavailable.' });
+        return;
+      }
+      const bkpCol = db.collection(BACKUP_COLLECTION);
+
+      if (req.method === 'GET') {
+        const doc = await bkpCol.findOne({ _id: backupId });
+        if (!doc) {
+          sendJson(res, 404, { ok: false, error: 'Backup not found.' });
+          return;
+        }
+        sendJson(res, 200, { ok: true, backup: doc });
+        return;
+      }
+
+      if (req.method === 'DELETE') {
+        await bkpCol.deleteOne({ _id: backupId });
+        sendJson(res, 200, { ok: true, deletedId: backupId });
+        return;
+      }
     }
 
     // Fetch all synced CRM key-value pairs from MongoDB
