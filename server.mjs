@@ -2296,9 +2296,13 @@ const server = http.createServer(async (req, res) => {
     // ========================================================================
     if (pathname === '/api/ai/status' && req.method === 'GET') {
       const configured = Boolean(String(process.env.GEMINI_API_KEY || '').trim());
+      const googleMapsConfigured = Boolean(
+        String(process.env.SERPER_API_KEY || process.env.GOOGLE_PLACES_API_KEY || '').trim()
+      );
       sendJson(res, 200, {
         ok: true,
         configured,
+        googleMapsConfigured,
         model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
       });
       return;
@@ -2396,10 +2400,17 @@ const server = http.createServer(async (req, res) => {
       const body = await readJsonBody(req);
       const category = String(body.category || '').trim();
       const city = String(body.city || '').trim();
-      const limit = Math.min(20, Math.max(5, Number(body.limit) || 12));
+      const limit = Math.min(30, Math.max(5, Number(body.limit) || 10));
+      const startPage = Math.max(1, Math.min(10, Number(body.startPage) || 1));
+      const excludeKeysArr = Array.isArray(body.excludeKeys) ? body.excludeKeys : [];
+      const excludeSet = new Set(
+        excludeKeysArr.map((k) => String(k || '').trim().toLowerCase()).filter(Boolean)
+      );
       const enrichWebsites = body.enrichWebsites !== false;
-      const serperApiKey = String(body.serperApiKey || '').trim();
-      const googlePlacesApiKey = String(body.googlePlacesApiKey || '').trim();
+      const serperApiKey = String(body.serperApiKey || process.env.SERPER_API_KEY || '').trim();
+      const googlePlacesApiKey = String(
+        body.googlePlacesApiKey || process.env.GOOGLE_PLACES_API_KEY || ''
+      ).trim();
 
       if (!category || !city) {
         sendJson(res, 400, { ok: false, error: 'Business category and city are both required.' });
@@ -2418,41 +2429,89 @@ const server = http.createServer(async (req, res) => {
 
       let rawLeads = [];
       let sourceEngine = 'OpenStreetMap (100% Free)';
+      let nextPage = startPage + 1;
+      let hasMore = false;
+      const batchSeen = new Set();
 
-      // 1A. Optional Serper.dev Google Maps Places API
+      const isAlreadyExcluded = (name, cid) => {
+        const normName = String(name || '').trim().toLowerCase();
+        const normCid = String(cid || '').trim().toLowerCase();
+        if (!normName) return true;
+        if (normCid && (excludeSet.has(`cid:${normCid}`) || batchSeen.has(`cid:${normCid}`))) {
+          return true;
+        }
+        if (excludeSet.has(normName) || batchSeen.has(normName)) {
+          return true;
+        }
+        if (normCid) batchSeen.add(`cid:${normCid}`);
+        batchSeen.add(normName);
+        return false;
+      };
+
+      // 1A. Google Maps via Serper.dev API (Multi-Page Loop to Guarantee Exact Requested Count)
       if (serperApiKey) {
-        try {
-          const sRes = await fetchWithTimeout(
-            'https://google.serper.dev/places',
-            {
-              method: 'POST',
-              headers: {
-                'X-API-KEY': serperApiKey,
-                'Content-Type': 'application/json',
+        const maxPagesToScan = 4;
+        let currentPage = startPage;
+        for (let step = 0; step < maxPagesToScan && rawLeads.length < limit; step++) {
+          try {
+            const sRes = await fetchWithTimeout(
+              'https://google.serper.dev/places',
+              {
+                method: 'POST',
+                headers: {
+                  'X-API-KEY': serperApiKey,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  q: `${category} in ${city}`,
+                  gl: 'in',
+                  page: currentPage,
+                }),
               },
-              body: JSON.stringify({ q: `${category} in ${city}`, gl: 'in', num: limit }),
-            },
-            10000
-          );
-          const sData = await sRes.json().catch(() => null);
-          if (sRes.ok && Array.isArray(sData?.places) && sData.places.length > 0) {
-            sourceEngine = 'Google Maps (Serper API)';
-            rawLeads = sData.places.slice(0, limit).map((p, idx) => ({
-              id: `ag-serp-${Date.now()}-${idx}`,
-              name: String(p.title || '').trim(),
-              category: String(p.category || category).trim(),
-              address: String(p.address || city).trim(),
-              city,
-              phone: String(p.phoneNumber || '').trim(),
-              email: '',
-              website: String(p.website || '').trim(),
-              rating: typeof p.rating === 'number' ? p.rating : null,
-              reviewsCount: typeof p.ratingCount === 'number' ? p.ratingCount : null,
-              sourceEngine,
-            }));
+              10000
+            );
+            const sData = await sRes.json().catch(() => null);
+            const places = Array.isArray(sData?.places) ? sData.places : [];
+            if (!sRes.ok || places.length === 0) {
+              hasMore = false;
+              break;
+            }
+            sourceEngine = 'Google Maps (Live)';
+            for (const p of places) {
+              if (rawLeads.length >= limit) break;
+              const title = String(p.title || '').trim();
+              const cid = String(p.cid || '').trim();
+              if (isAlreadyExcluded(title, cid)) continue;
+              const mapsUrl = cid
+                ? `https://www.google.com/maps?cid=${encodeURIComponent(cid)}`
+                : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                    `${title} ${p.address || city}`
+                  )}`;
+              rawLeads.push({
+                id: `ag-gm-${cid || `${Date.now()}-${rawLeads.length}`}`,
+                cid,
+                name: title,
+                searchCategory: category,
+                category: String(p.category || category).trim(),
+                address: String(p.address || city).trim(),
+                city,
+                phone: String(p.phoneNumber || '').trim(),
+                email: '',
+                website: String(p.website || '').trim(),
+                googleMapsUrl: mapsUrl,
+                latitude: typeof p.latitude === 'number' ? p.latitude : null,
+                longitude: typeof p.longitude === 'number' ? p.longitude : null,
+                rating: typeof p.rating === 'number' ? p.rating : null,
+                reviewsCount: typeof p.ratingCount === 'number' ? p.ratingCount : null,
+                sourceEngine,
+              });
+            }
+            currentPage += 1;
+            nextPage = currentPage;
+            hasMore = places.length >= 8;
+          } catch {
+            break;
           }
-        } catch {
-          /* fall back to free engine */
         }
       }
 
@@ -2467,11 +2526,11 @@ const server = http.createServer(async (req, res) => {
                 'Content-Type': 'application/json',
                 'X-Goog-Api-Key': googlePlacesApiKey,
                 'X-Goog-FieldMask':
-                  'places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.internationalPhoneNumber,places.websiteUri,places.rating,places.userRatingCount,places.primaryTypeDisplayName',
+                  'places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.internationalPhoneNumber,places.websiteUri,places.googleMapsUri,places.rating,places.userRatingCount,places.primaryTypeDisplayName',
               },
               body: JSON.stringify({
                 textQuery: `${category} in ${city}`,
-                maxResultCount: limit,
+                maxResultCount: Math.min(20, limit),
               }),
             },
             10000
@@ -2479,41 +2538,58 @@ const server = http.createServer(async (req, res) => {
           const gData = await gRes.json().catch(() => null);
           if (gRes.ok && Array.isArray(gData?.places) && gData.places.length > 0) {
             sourceEngine = 'Google Places API';
-            rawLeads = gData.places.slice(0, limit).map((p, idx) => ({
-              id: `ag-gpl-${Date.now()}-${idx}`,
-              name: String(p.displayName?.text || '').trim(),
-              category: String(p.primaryTypeDisplayName?.text || category).trim(),
-              address: String(p.formattedAddress || city).trim(),
-              city,
-              phone: String(p.internationalPhoneNumber || p.nationalPhoneNumber || '').trim(),
-              email: '',
-              website: String(p.websiteUri || '').trim(),
-              rating: typeof p.rating === 'number' ? p.rating : null,
-              reviewsCount: typeof p.userRatingCount === 'number' ? p.userRatingCount : null,
-              sourceEngine,
-            }));
+            for (const p of gData.places) {
+              if (rawLeads.length >= limit) break;
+              const title = String(p.displayName?.text || '').trim();
+              const pid = String(p.id || '').trim();
+              if (isAlreadyExcluded(title, pid)) continue;
+              rawLeads.push({
+                id: `ag-gpl-${pid || `${Date.now()}-${rawLeads.length}`}`,
+                cid: pid,
+                name: title,
+                searchCategory: category,
+                category: String(p.primaryTypeDisplayName?.text || category).trim(),
+                address: String(p.formattedAddress || city).trim(),
+                city,
+                phone: String(p.internationalPhoneNumber || p.nationalPhoneNumber || '').trim(),
+                email: '',
+                website: String(p.websiteUri || '').trim(),
+                googleMapsUrl:
+                  String(p.googleMapsUri || '').trim() ||
+                  `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                    `${title} ${city}`
+                  )}`,
+                rating: typeof p.rating === 'number' ? p.rating : null,
+                reviewsCount: typeof p.userRatingCount === 'number' ? p.userRatingCount : null,
+                sourceEngine,
+              });
+            }
           }
         } catch {
           /* fall back to free engine */
         }
       }
 
-      // 1C. Default 100% Free Engine: OpenStreetMap Nominatim + Overpass Public Directory
+      // 1C. Fallback 100% Free Engine: OpenStreetMap Photon + Overpass
       if (rawLeads.length === 0) {
         const uaHeaders = {
           'User-Agent': 'OzoStackCRM-LeadFinder/1.0 (https://ozostack.in)',
           Accept: 'application/json',
         };
-        const seenNames = new Set();
 
         const pushOsmItem = (item) => {
           const nm = String(item.name || '').trim();
           if (!nm || nm.length < 2) return;
           const key = nm.toLowerCase();
           if (key === category.toLowerCase() || key === city.toLowerCase()) return;
-          if (seenNames.has(key)) return;
-          seenNames.add(key);
-          rawLeads.push(item);
+          if (isAlreadyExcluded(nm, item.id)) return;
+          rawLeads.push({
+            ...item,
+            searchCategory: category,
+            googleMapsUrl: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+              `${nm} ${item.address || city}`
+            )}`,
+          });
         };
 
         // Step A: Geocode city via Photon (fast, Cloud-Run friendly, never 403s like Nominatim)
@@ -2763,6 +2839,22 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
+        // Also detect visible Indian phone numbers (+91 XXXXX XXXXX) if no tel: link found
+        if (phones.size === 0) {
+          const plainText = cleanHtml
+            .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+            .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+            .replace(/<[^>]+>/g, ' ');
+          const inPhones = plainText.match(/(?:\+91[\s-]?|0)?[6-9]\d{4}[\s-]?\d{5}/g) || [];
+          for (const rawP of inPhones.slice(0, 3)) {
+            const digits = rawP.replace(/[^0-9]/g, '');
+            const last10 = digits.length >= 10 ? digits.slice(-10) : '';
+            if (last10.length === 10) {
+              phones.add(`+91 ${last10.slice(0, 5)} ${last10.slice(5)}`);
+            }
+          }
+        }
+
         // Social links
         const ig = cleanHtml.match(/https?:\/\/(?:www\.)?instagram\.com\/[a-zA-Z0-9._-]+/i);
         const fb = cleanHtml.match(/https?:\/\/(?:www\.)?facebook\.com\/[a-zA-Z0-9._-]+/i);
@@ -2829,27 +2921,31 @@ const server = http.createServer(async (req, res) => {
                 if (found.whatsapp) whatsapp = found.whatsapp;
                 socials = found.socials;
 
-                // If still no email, check /contact page once (lightweight)
-                if (!email) {
-                  try {
-                    const baseOrigin = new URL(website).origin;
-                    const cRes = await fetchWithTimeout(
-                      `${baseOrigin}/contact`,
-                      {
-                        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; OzoStackCRM/1.0)' },
-                        redirect: 'follow',
-                      },
-                      3500
-                    );
-                    if (cRes.ok && String(cRes.headers.get('content-type') || '').includes('text/html')) {
-                      const cHtml = await cRes.text();
-                      const cFound = extractContactsFromHtml(cHtml);
-                      if (cFound.emails[0]) email = cFound.emails[0];
-                      if (!phone && cFound.phones[0]) phone = cFound.phones[0];
-                      if (!whatsapp && cFound.whatsapp) whatsapp = cFound.whatsapp;
+                // If still missing email or phone, check /contact or /contact-us once (lightweight)
+                if (!email || !phone) {
+                  const baseOrigin = new URL(website).origin;
+                  for (const subPath of ['/contact', '/contact-us']) {
+                    if (email && phone) break;
+                    try {
+                      const cRes = await fetchWithTimeout(
+                        `${baseOrigin}${subPath}`,
+                        {
+                          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; OzoStackCRM/1.0)' },
+                          redirect: 'follow',
+                        },
+                        3200
+                      );
+                      if (cRes.ok && String(cRes.headers.get('content-type') || '').includes('text/html')) {
+                        const cHtml = await cRes.text();
+                        const cFound = extractContactsFromHtml(cHtml);
+                        if (!email && cFound.emails[0]) email = cFound.emails[0];
+                        if (!phone && cFound.phones[0]) phone = cFound.phones[0];
+                        if (!whatsapp && cFound.whatsapp) whatsapp = cFound.whatsapp;
+                        socials = { ...cFound.socials, ...socials };
+                      }
+                    } catch {
+                      /* ignore */
                     }
-                  } catch {
-                    /* ignore */
                   }
                 }
               }
@@ -2887,9 +2983,9 @@ const server = http.createServer(async (req, res) => {
         };
       };
 
-      // Process with strict concurrency = 4 so Cloud Run CPU/RAM stays super light
+      // Process with strict concurrency = 5 so Cloud Run CPU/RAM stays super light
       const enriched = [];
-      const CONCURRENCY = 4;
+      const CONCURRENCY = 5;
       for (let i = 0; i < rawLeads.length; i += CONCURRENCY) {
         const chunk = rawLeads.slice(i, i + CONCURRENCY);
         const done = await Promise.all(chunk.map((item) => enrichOne(item)));
@@ -2900,6 +2996,8 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         sourceEngine,
         count: enriched.length,
+        nextPage,
+        hasMore,
         leads: enriched,
       });
       return;

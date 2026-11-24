@@ -7,6 +7,7 @@ import {
   Cpu,
   Download,
   ExternalLink,
+  FolderKanban,
   Globe,
   KeyRound,
   Loader2,
@@ -14,21 +15,26 @@ import {
   MapPin,
   MessageSquare,
   Phone,
+  Plus,
   Search,
   ShieldCheck,
   Sparkles,
   Star,
+  Tag,
   Trash2,
   UserPlus,
   X,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
+import { useCrmConfig } from '../../data/crmConfig';
 import { Lead } from '../../types/crm';
 
 interface DiscoveredLead {
   id: string;
+  cid?: string;
   name: string;
+  searchCategory?: string;
   category: string;
   address: string;
   city: string;
@@ -39,6 +45,9 @@ interface DiscoveredLead {
   emailStatus: 'verified' | 'unverified' | 'missing';
   website: string;
   websiteLive: boolean;
+  googleMapsUrl?: string;
+  latitude?: number | null;
+  longitude?: number | null;
   rating: number | null;
   reviewsCount: number | null;
   sourceEngine: string;
@@ -76,6 +85,8 @@ const QUICK_CATEGORIES = [
   'School',
   'Hospital',
   'Interior Design',
+  'CA Firm',
+  'Travel Agency',
 ];
 
 const LEADS_STORAGE_KEY = (uid: string) => `ozostack_ai_agent_leads_user_v1_${uid}`;
@@ -100,35 +111,61 @@ function loadExistingCrmLeads(): Lead[] {
 export const AiAgentsView: React.FC = () => {
   const { theme } = useTheme();
   const { currentUser, can } = useAuth();
+  const { config: crmConfig } = useCrmConfig();
   const isLight = theme === 'white-sky';
   const userId = currentUser?.id || 'default';
 
   const canImportLeads = can('AI Agents', 'create') || can('Leads', 'create');
   const canExportCsv = can('AI Agents', 'export') || can('Leads', 'export');
 
+  // Server Maps status
+  const [serverMapsReady, setServerMapsReady] = useState(false);
+
   // Search form state
   const [category, setCategory] = useState('Dental Clinic');
   const [city, setCity] = useState('Mumbai');
-  const [limit, setLimit] = useState<number>(12);
+  const [limit, setLimit] = useState<number>(10);
   const [enrichWebsites, setEnrichWebsites] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
 
-  // Per-user config & staging leads
+  // Pagination tracker per (category|city) so "Load More" always grabs brand-new pages
+  const [pageCursorByQuery, setPageCursorByQuery] = useState<Record<string, number>>({});
+  const [hasMoreByQuery, setHasMoreByQuery] = useState<Record<string, boolean>>({});
+
+  // Per-user config & persistent staging vault (NEVER auto-cleared on new searches)
   const [agentCfg, setAgentCfg] = useState<AgentUserConfig>(DEFAULT_CONFIG);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [leads, setLeads] = useState<DiscoveredLead[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [filterMode, setFilterMode] = useState<'all' | 'verified' | 'email' | 'phone' | 'new'>('all');
+  const [activeCategoryFilter, setActiveCategoryFilter] = useState<string>('ALL');
+
+  // Push-to-CRM Category & Stage Controls
+  const [pushCategoryMode, setPushCategoryMode] = useState<string>('__AUTO__');
+  const [customPushCategory, setCustomPushCategory] = useState<string>('');
+  const [pushStage, setPushStage] = useState<string>('New Lead');
+  const [pushSource, setPushSource] = useState<string>('Google Maps');
+
   const [isVerifyingAi, setIsVerifyingAi] = useState(false);
   const [pitchModalLead, setPitchModalLead] = useState<DiscoveredLead | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
   const [crmLeadsTick, setCrmLeadsTick] = useState(0);
   const [banner, setBanner] = useState<{ type: 'ok' | 'err' | 'info'; text: string } | null>(null);
 
   const showBanner = (type: 'ok' | 'err' | 'info', text: string) => {
     setBanner({ type, text });
-    setTimeout(() => setBanner((prev) => (prev?.text === text ? null : prev)), 6000);
+    setTimeout(() => setBanner((prev) => (prev?.text === text ? null : prev)), 6500);
   };
+
+  useEffect(() => {
+    fetch('/api/ai/status')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.googleMapsConfigured) setServerMapsReady(true);
+      })
+      .catch(() => {});
+  }, []);
 
   // Load per-user isolated state & reset cleanly on user switch
   useEffect(() => {
@@ -145,7 +182,11 @@ export const AiAgentsView: React.FC = () => {
       setAgentCfg(DEFAULT_CONFIG);
     }
     setSelectedIds([]);
+    setActiveCategoryFilter('ALL');
     setPitchModalLead(null);
+    setConfirmClearAll(false);
+    setPageCursorByQuery({});
+    setHasMoreByQuery({});
     setCrmLeadsTick((t) => t + 1);
   }, [userId]);
 
@@ -167,7 +208,7 @@ export const AiAgentsView: React.FC = () => {
     }
   };
 
-  // Build existing CRM duplicate lookup sets (by normalized 10-digit phone, email, or name+company)
+  // Existing CRM duplicate lookup sets
   const existingDuplicateSets = useMemo(() => {
     const crmLeads = loadExistingCrmLeads();
     const phones = new Set<string>();
@@ -194,42 +235,69 @@ export const AiAgentsView: React.FC = () => {
     return false;
   };
 
+  // Distinct categories saved in staging vault (so user can switch/push by category)
+  const savedCategories = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const l of leads) {
+      const grp = String(l.searchCategory || l.category || 'General').trim();
+      counts.set(grp, (counts.get(grp) || 0) + 1);
+    }
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+  }, [leads]);
+
   const filteredLeads = useMemo(() => {
     return leads.filter((l) => {
+      const grp = String(l.searchCategory || l.category || 'General').trim();
+      if (activeCategoryFilter !== 'ALL' && grp !== activeCategoryFilter) return false;
       if (filterMode === 'verified') return l.verificationStatus === 'Verified';
       if (filterMode === 'email') return Boolean(l.email);
       if (filterMode === 'phone') return l.phoneVerified;
       if (filterMode === 'new') return !isDuplicateInCrm(l);
       return true;
     });
-  }, [leads, filterMode, existingDuplicateSets]);
+  }, [leads, filterMode, activeCategoryFilter, existingDuplicateSets]);
 
   const stats = useMemo(() => {
-    const total = leads.length;
-    const mxVerified = leads.filter((l) => l.emailStatus === 'verified').length;
-    const withPhone = leads.filter((l) => l.phoneVerified).length;
-    const aiScored = leads.filter((l) => typeof l.aiScore === 'number').length;
-    const duplicates = leads.filter((l) => isDuplicateInCrm(l)).length;
+    const total = filteredLeads.length;
+    const mxVerified = filteredLeads.filter((l) => l.emailStatus === 'verified').length;
+    const withPhone = filteredLeads.filter((l) => l.phoneVerified).length;
+    const aiScored = filteredLeads.filter((l) => typeof l.aiScore === 'number').length;
+    const duplicates = filteredLeads.filter((l) => isDuplicateInCrm(l)).length;
     return { total, mxVerified, withPhone, aiScored, duplicates };
-  }, [leads, existingDuplicateSets]);
+  }, [filteredLeads, existingDuplicateSets]);
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!category.trim() || !city.trim()) {
+  const currentQueryKey = `${category.trim().toLowerCase()}|${city.trim().toLowerCase()}`;
+  const currentNextPage = pageCursorByQuery[currentQueryKey] || 1;
+  const canLoadMoreCurrent = hasMoreByQuery[currentQueryKey] === true;
+
+  const runLeadDiscovery = async (isLoadMore: boolean) => {
+    const catClean = category.trim();
+    const cityClean = city.trim();
+    if (!catClean || !cityClean) {
       showBanner('err', 'Please enter both Business Category and City.');
       return;
     }
 
     setIsSearching(true);
-    setSelectedIds([]);
     try {
+      // Collect every already-found business name & CID so backend skips them and returns BRAND-NEW leads!
+      const excludeKeys: string[] = [];
+      for (const l of leads) {
+        if (l.name) excludeKeys.push(l.name.toLowerCase());
+        if (l.cid) excludeKeys.push(`cid:${l.cid.toLowerCase()}`);
+      }
+
+      const startPage = isLoadMore ? currentNextPage : pageCursorByQuery[currentQueryKey] || 1;
+
       const res = await fetch('/api/agents/lead-search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          category: category.trim(),
-          city: city.trim(),
+          category: catClean,
+          city: cityClean,
           limit,
+          startPage,
+          excludeKeys,
           enrichWebsites,
           serperApiKey: agentCfg.serperApiKey.trim() || undefined,
           googlePlacesApiKey: agentCfg.googlePlacesApiKey.trim() || undefined,
@@ -243,27 +311,56 @@ export const AiAgentsView: React.FC = () => {
       }
 
       const found: DiscoveredLead[] = Array.isArray(data.leads) ? data.leads : [];
-      persistLeads(found);
+      if (data.nextPage) {
+        setPageCursorByQuery((prev) => ({ ...prev, [currentQueryKey]: Number(data.nextPage) }));
+      }
+      setHasMoreByQuery((prev) => ({ ...prev, [currentQueryKey]: Boolean(data.hasMore) }));
+
       if (found.length === 0) {
         showBanner(
           'info',
-          `No public listings matched "${category}" in "${city}". Try a broader category like "Clinic", "Hotel", "Restaurant", or "Office".`
+          `No additional new leads found for "${catClean}" in "${cityClean}". Try another locality/city or category — your previous ${leads.length} leads are still safely kept below.`
         );
       } else {
+        // APPEND/PREPEND new leads while keeping ALL previous leads intact!
+        const existingSet = new Set(
+          leads.flatMap((l) => [
+            l.name.trim().toLowerCase(),
+            l.cid ? `cid:${l.cid.toLowerCase()}` : '',
+          ]).filter(Boolean)
+        );
+        const brandNew = found.filter((f) => {
+          const nKey = f.name.trim().toLowerCase();
+          const cKey = f.cid ? `cid:${f.cid.toLowerCase()}` : '';
+          if (existingSet.has(nKey) || (cKey && existingSet.has(cKey))) return false;
+          existingSet.add(nKey);
+          if (cKey) existingSet.add(cKey);
+          return true;
+        });
+
+        const merged = [...brandNew, ...leads];
+        persistLeads(merged);
+        setActiveCategoryFilter(catClean);
         showBanner(
           'ok',
-          `Discovered ${found.length} public businesses via ${data.sourceEngine} with contact & DNS MX checks.`
+          `Added ${brandNew.length} NEW "${catClean}" leads via ${data.sourceEngine}! Total saved in staging: ${merged.length} (previous leads kept safely).`
         );
       }
     } catch (err: any) {
-      showBanner('err', err?.message || 'Network error while searching public directories.');
+      showBanner('err', err?.message || 'Network error while searching leads.');
     } finally {
       setIsSearching(false);
     }
   };
 
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    runLeadDiscovery(false);
+  };
+
   const handleRunAiVerifier = async () => {
-    if (leads.length === 0) return;
+    const targetLeads = filteredLeads.slice(0, 20);
+    if (targetLeads.length === 0) return;
     setIsVerifyingAi(true);
     try {
       let customGeminiKey = '';
@@ -277,7 +374,7 @@ export const AiAgentsView: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          leads,
+          leads: targetLeads,
           businessOffer: agentCfg.businessOffer,
           tone: agentCfg.pitchTone,
           customApiKey: customGeminiKey || undefined,
@@ -300,8 +397,14 @@ export const AiAgentsView: React.FC = () => {
         if (!ai) return l;
         return {
           ...l,
-          aiScore: typeof ai.aiScore === 'number' ? Math.max(0, Math.min(100, Math.round(ai.aiScore))) : l.aiScore,
-          priority: (['Hot', 'Warm', 'Cold'].includes(ai.priority) ? ai.priority : 'Warm') as 'Hot' | 'Warm' | 'Cold',
+          aiScore:
+            typeof ai.aiScore === 'number'
+              ? Math.max(0, Math.min(100, Math.round(ai.aiScore)))
+              : l.aiScore,
+          priority: (['Hot', 'Warm', 'Cold'].includes(ai.priority) ? ai.priority : 'Warm') as
+            | 'Hot'
+            | 'Warm'
+            | 'Cold',
           opportunity: String(ai.opportunity || '').trim(),
           pitchEmailSubject: String(ai.pitchEmailSubject || '').trim(),
           pitchEmailBody: String(ai.pitchEmailBody || '').trim(),
@@ -309,8 +412,6 @@ export const AiAgentsView: React.FC = () => {
         };
       });
 
-      // Sort highest AI score first
-      updated.sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0));
       persistLeads(updated);
       showBanner(
         'ok',
@@ -327,56 +428,87 @@ export const AiAgentsView: React.FC = () => {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
-  const handleSelectAllImportable = () => {
+  const handleSelectAllFilteredImportable = () => {
     const importable = filteredLeads.filter((l) => !isDuplicateInCrm(l)).map((l) => l.id);
-    if (selectedIds.length === importable.length && importable.length > 0) {
-      setSelectedIds([]);
+    const allSelected =
+      importable.length > 0 && importable.every((id) => selectedIds.includes(id));
+    if (allSelected) {
+      setSelectedIds((prev) => prev.filter((id) => !importable.includes(id)));
     } else {
-      setSelectedIds(importable);
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...importable])));
     }
+  };
+
+  const handleRemoveOneLead = (id: string) => {
+    persistLeads(leads.filter((l) => l.id !== id));
+    setSelectedIds((prev) => prev.filter((x) => x !== id));
   };
 
   const handleImportSelected = () => {
     if (!canImportLeads) {
-      showBanner('err', 'You do not have permission to import leads into CRM.');
+      showBanner('err', 'You do not have permission to push leads into CRM.');
       return;
     }
     const chosen = leads.filter((l) => selectedIds.includes(l.id) && !isDuplicateInCrm(l));
     if (chosen.length === 0) {
-      showBanner('info', 'Select at least one new (non-duplicate) lead to import.');
+      showBanner('info', 'Select at least one new (non-duplicate) lead to push into CRM.');
       return;
     }
+
+    const resolvedCustomCat =
+      pushCategoryMode === '__CUSTOM__'
+        ? customPushCategory.trim()
+        : pushCategoryMode === '__AUTO__'
+        ? ''
+        : pushCategoryMode;
 
     const existing = loadExistingCrmLeads();
     const today = new Date().toISOString().split('T')[0];
     const ownerName = currentUser?.name || 'Administrator';
 
     const newCrmLeads: Lead[] = chosen.map((item, idx) => {
+      const assignedCat = resolvedCustomCat || item.searchCategory || item.category || 'Business Lead';
+      const socialLines = [
+        item.socials?.instagram ? `Instagram: ${item.socials.instagram}` : '',
+        item.socials?.facebook ? `Facebook: ${item.socials.facebook}` : '',
+        item.socials?.linkedin ? `LinkedIn: ${item.socials.linkedin}` : '',
+      ].filter(Boolean);
+
       const noteLines = [
-        `Discovered via AI Agents (${item.sourceEngine})`,
-        `Category: ${item.category} | Address: ${item.address}`,
-        item.website ? `Website: ${item.website} (${item.websiteLive ? 'Live' : 'Unreachable'})` : '',
-        item.emailStatus === 'verified' ? 'Email: DNS MX Verified' : '',
+        `Category: ${assignedCat} (${item.category})`,
+        `Full Address: ${item.address}`,
+        `City: ${item.city}`,
+        item.rating !== null
+          ? `Google Rating: ${item.rating} ★${item.reviewsCount ? ` (${item.reviewsCount} reviews)` : ''}`
+          : '',
+        item.website ? `Website: ${item.website} (${item.websiteLive ? 'Live' : 'Unchecked'})` : '',
+        item.googleMapsUrl ? `Google Maps: ${item.googleMapsUrl}` : '',
+        item.email ? `Email: ${item.email} (${item.emailStatus === 'verified' ? 'DNS MX Verified' : 'Unverified'})` : '',
+        item.whatsapp ? `WhatsApp: ${item.whatsapp}` : '',
+        ...socialLines,
         item.opportunity ? `AI Opportunity: ${item.opportunity}` : '',
+        `Source Engine: ${item.sourceEngine}`,
       ].filter(Boolean);
 
       return {
         id: `lead-ag-${Date.now()}-${idx}`,
         name: item.name,
         company: item.name,
-        title: item.category || 'Business Lead',
+        title: assignedCat,
         email: item.email || 'no-email@lead.local',
         phone: item.phone || '+91 00000 00000',
         whatsapp: item.whatsapp || item.phone || '',
-        status: 'New Lead',
+        status: (pushStage || 'New Lead') as any,
         priority: item.priority || (item.verificationStatus === 'Verified' ? 'Hot' : 'Warm'),
         value: 25000,
-        source: 'Lead Finder' as any,
+        source: (pushSource || 'Google Maps') as any,
         owner: ownerName,
-        score: item.aiScore || (item.verificationStatus === 'Verified' ? 80 : 60),
+        score: item.aiScore || (item.verificationStatus === 'Verified' ? 82 : 65),
         createdAt: today,
         notes: noteLines.join('\n'),
-        tags: ['AI Agent', item.verificationStatus, item.city].filter(Boolean),
+        tags: Array.from(
+          new Set([assignedCat, item.city, item.verificationStatus, 'AI Agent'].filter(Boolean))
+        ),
       };
     });
 
@@ -389,19 +521,22 @@ export const AiAgentsView: React.FC = () => {
     setCrmLeadsTick((t) => t + 1);
     showBanner(
       'ok',
-      `Imported ${newCrmLeads.length} verified lead(s) cleanly into CRM Leads (no auto-spam emails triggered).`
+      `Pushed ${newCrmLeads.length} lead(s) into CRM Leads under Stage "${pushStage}"${
+        resolvedCustomCat ? ` & Category "${resolvedCustomCat}"` : ''
+      } with full business details!`
     );
   };
 
   const handleExportCsv = () => {
     if (!canExportCsv || filteredLeads.length === 0) return;
     const header =
-      'Business Name,Category,City,Address,Phone,WhatsApp,Email,Email MX Status,Website,Verification,AI Score,Priority,AI Opportunity,Source\n';
+      'Business Name,Search Category,Google Category,City,Full Address,Phone,WhatsApp,Email,Email MX Status,Website,Website Live,Google Rating,Reviews,Google Maps URL,Instagram,Facebook,LinkedIn,Verification,AI Score,Priority,AI Opportunity,Source\n';
     const esc = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const rows = filteredLeads
       .map((l) =>
         [
           l.name,
+          l.searchCategory || l.category,
           l.category,
           l.city,
           l.address,
@@ -410,6 +545,13 @@ export const AiAgentsView: React.FC = () => {
           l.email,
           l.emailStatus,
           l.website,
+          l.websiteLive ? 'Yes' : 'No',
+          l.rating ?? '',
+          l.reviewsCount ?? '',
+          l.googleMapsUrl ?? '',
+          l.socials?.instagram ?? '',
+          l.socials?.facebook ?? '',
+          l.socials?.linkedin ?? '',
           l.verificationStatus,
           l.aiScore ?? '',
           l.priority ?? '',
@@ -425,10 +567,10 @@ export const AiAgentsView: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `ozostack_ai_leads_${city.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.csv`;
+    a.download = `ozostack_leads_${activeCategoryFilter === 'ALL' ? 'all' : activeCategoryFilter.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    showBanner('ok', `Exported ${filteredLeads.length} leads to CSV.`);
+    showBanner('ok', `Exported ${filteredLeads.length} leads with complete details to CSV.`);
   };
 
   const copyText = (key: string, text: string) => {
@@ -446,16 +588,33 @@ export const AiAgentsView: React.FC = () => {
       : 'bg-slate-900 border-slate-700 text-white focus:border-sky-400'
   }`;
 
-  const activeEngineLabel = agentCfg.serperApiKey
-    ? 'Google Maps (Serper API) + Website Extractor'
-    : agentCfg.googlePlacesApiKey
-    ? 'Google Places API + Website Extractor'
-    : '100% Free Public Engine (OpenStreetMap + Website Extractor + DNS MX)';
+  const activeEngineLabel =
+    agentCfg.serperApiKey || serverMapsReady
+      ? 'Google Maps Live Engine (Connected) + Website Extractor + DNS MX'
+      : agentCfg.googlePlacesApiKey
+      ? 'Google Places API + Website Extractor + DNS MX'
+      : 'Free OpenStreetMap Engine + Website Extractor + DNS MX';
+
+  const stageNames = useMemo(() => {
+    const list = (crmConfig.leadStages || []).map((s) => s.name).filter(Boolean);
+    return list.length > 0 ? list : ['New Lead', 'Contacted', 'Qualified', 'Proposal Sent'];
+  }, [crmConfig.leadStages]);
+
+  const sourceNames = useMemo(() => {
+    const base = (crmConfig.leadSources || []).map((s) => s.name).filter(Boolean);
+    return Array.from(new Set(['Google Maps', 'Lead Finder', ...base]));
+  }, [crmConfig.leadSources]);
+
+  const categoryChoices = useMemo(() => {
+    return Array.from(new Set([...savedCategories.map(([c]) => c), ...QUICK_CATEGORIES]));
+  }, [savedCategories]);
 
   return (
     <div className="space-y-4 pb-10 animate-fade-in">
       {/* Header Banner */}
-      <div className={`p-5 rounded-2xl border ${cardCls} border-sky-500/25 bg-gradient-to-r from-sky-500/10 via-indigo-500/5 to-transparent`}>
+      <div
+        className={`p-5 rounded-2xl border ${cardCls} border-sky-500/25 bg-gradient-to-r from-sky-500/10 via-indigo-500/5 to-transparent`}
+      >
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div className="flex items-start gap-3">
             <div className="p-2.5 rounded-xl bg-sky-500/15 text-sky-500 shrink-0">
@@ -463,15 +622,15 @@ export const AiAgentsView: React.FC = () => {
             </div>
             <div className="space-y-1">
               <h1 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white flex flex-wrap items-center gap-2">
-                <span>AI Agents — Public Lead Discovery &amp; Verification</span>
+                <span>AI Agents — Google Maps Lead Discovery &amp; Verifier</span>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
                   {activeEngineLabel}
                 </span>
               </h1>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Discover public businesses, extract emails &amp; WhatsApp from live websites, verify
-                domains via DNS MX, score with Gemini AI, and import only clean non-duplicate leads into
-                CRM.
+                Fetch exact lead counts from Google Maps with full business details (Phone, WhatsApp,
+                Website, MX-Verified Email, Rating, Address &amp; Socials). Previous searches stay saved
+                — organize by category and push cleanly to CRM Leads.
               </p>
             </div>
           </div>
@@ -482,11 +641,11 @@ export const AiAgentsView: React.FC = () => {
             className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 shrink-0"
           >
             <KeyRound className="w-3.5 h-3.5 text-sky-500" />
-            <span>Pitch &amp; Optional Maps Keys</span>
+            <span>Pitch &amp; API Settings</span>
           </button>
         </div>
 
-        {/* Collapsible Pitch & Optional Keys Drawer */}
+        {/* Collapsible Pitch & Optional Override Keys Drawer */}
         {isSettingsOpen && (
           <div className="mt-4 pt-4 border-t border-slate-200/70 dark:border-slate-800 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
             <div>
@@ -523,26 +682,35 @@ export const AiAgentsView: React.FC = () => {
 
             <div>
               <label className="font-bold text-slate-700 dark:text-slate-200 block mb-1">
-                Optional: Serper.dev API Key (2,500 Free Google Maps Searches — No Card)
+                Personal Serper API Key Override{' '}
+                {serverMapsReady && (
+                  <span className="text-emerald-600 dark:text-emerald-400">
+                    (Server Google Maps Key Already Active!)
+                  </span>
+                )}
               </label>
               <input
                 type="password"
                 value={agentCfg.serperApiKey}
                 onChange={(e) => persistConfig({ ...agentCfg, serperApiKey: e.target.value })}
-                placeholder="Leave blank to use 100% Free OpenStreetMap Engine"
+                placeholder={
+                  serverMapsReady
+                    ? 'Leave blank — server Google Maps key is active'
+                    : 'Optional Serper.dev API key'
+                }
                 className={inputCls}
               />
             </div>
 
             <div>
               <label className="font-bold text-slate-700 dark:text-slate-200 block mb-1">
-                Optional: Google Places API Key (Official Maps Places v1)
+                Optional: Google Places API Key Override
               </label>
               <input
                 type="password"
                 value={agentCfg.googlePlacesApiKey}
                 onChange={(e) => persistConfig({ ...agentCfg, googlePlacesApiKey: e.target.value })}
-                placeholder="Leave blank to use 100% Free OpenStreetMap Engine"
+                placeholder="Leave blank to use default engine"
                 className={inputCls}
               />
             </div>
@@ -576,7 +744,7 @@ export const AiAgentsView: React.FC = () => {
       )}
 
       {/* Search Card */}
-      <form onSubmit={handleSearch} className={`p-5 rounded-2xl border space-y-4 ${cardCls}`}>
+      <form onSubmit={handleSearchSubmit} className={`p-5 rounded-2xl border space-y-4 ${cardCls}`}>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 text-xs">
           <div className="lg:col-span-4">
             <label className="font-bold text-slate-700 dark:text-slate-200 block mb-1">
@@ -591,52 +759,67 @@ export const AiAgentsView: React.FC = () => {
             />
           </div>
 
-          <div className="lg:col-span-4">
+          <div className="lg:col-span-3">
             <label className="font-bold text-slate-700 dark:text-slate-200 block mb-1">
-              City / Location *
+              City / Area *
             </label>
             <input
               required
               value={city}
               onChange={(e) => setCity(e.target.value)}
-              placeholder="e.g. Mumbai, Kolkata, Delhi, Bengaluru"
+              placeholder="e.g. Mumbai, Andheri, Kolkata"
               className={inputCls}
             />
           </div>
 
           <div className="lg:col-span-2">
             <label className="font-bold text-slate-700 dark:text-slate-200 block mb-1">
-              Batch Limit
+              Exact Leads Count
             </label>
             <select
               value={limit}
               onChange={(e) => setLimit(Number(e.target.value))}
               className={inputCls}
             >
-              <option value={8}>8 Leads (Fast)</option>
-              <option value={12}>12 Leads (Balanced)</option>
-              <option value={20}>20 Leads (Max)</option>
+              <option value={8}>8 New Leads</option>
+              <option value={10}>10 New Leads</option>
+              <option value={15}>15 New Leads</option>
+              <option value={20}>20 New Leads</option>
+              <option value={30}>30 New Leads</option>
             </select>
           </div>
 
-          <div className="lg:col-span-2 flex items-end">
+          <div className="lg:col-span-3 flex items-end gap-2">
             <button
               type="submit"
               disabled={isSearching}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-600 disabled:opacity-60 text-white text-xs font-bold shadow-xs transition-colors"
+              className="flex-1 flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-sky-500 hover:bg-sky-600 disabled:opacity-60 text-white text-xs font-bold shadow-xs transition-colors"
             >
               {isSearching ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>Scanning...</span>
+                  <span>Fetching...</span>
                 </>
               ) : (
                 <>
                   <Search className="w-3.5 h-3.5" />
-                  <span>Find Leads</span>
+                  <span>Find &amp; Add Leads</span>
                 </>
               )}
             </button>
+
+            {canLoadMoreCurrent && (
+              <button
+                type="button"
+                disabled={isSearching}
+                onClick={() => runLeadDiscovery(true)}
+                className="flex items-center justify-center gap-1 px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-xs font-bold shadow-xs transition-colors shrink-0"
+                title={`Fetch next ${limit} brand-new leads (Page ${currentNextPage})`}
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Next {limit}</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -666,24 +849,144 @@ export const AiAgentsView: React.FC = () => {
               onChange={(e) => setEnrichWebsites(e.target.checked)}
               className="rounded accent-sky-500"
             />
-            <span>Extract Emails &amp; WhatsApp from Public Websites + DNS MX Verify</span>
+            <span>Extract Full Email, Phone, WhatsApp &amp; Socials from Websites + DNS MX</span>
           </label>
         </div>
       </form>
 
-      {/* Results Toolbar & Staging Table */}
+      {/* Persistent Staging Vault & Push-to-CRM Controls */}
       <div className={`p-5 rounded-2xl border space-y-4 ${cardCls}`}>
-        {/* KPI Strip + Action Buttons */}
+        {/* Saved Categories Strip (Keeps All Previous Searches Intact!) */}
+        {savedCategories.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 pb-3 border-b border-slate-100 dark:border-slate-800">
+            <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 flex items-center gap-1 mr-1">
+              <FolderKanban className="w-3.5 h-3.5 text-sky-500" />
+              Saved Categories:
+            </span>
+            <button
+              type="button"
+              onClick={() => setActiveCategoryFilter('ALL')}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+                activeCategoryFilter === 'ALL'
+                  ? 'bg-sky-500 text-white'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              All Saved ({leads.length})
+            </button>
+            {savedCategories.map(([catName, count]) => (
+              <button
+                key={catName}
+                type="button"
+                onClick={() => setActiveCategoryFilter(catName)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+                  activeCategoryFilter === catName
+                    ? 'bg-sky-500 text-white'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-sky-500/15'
+                }`}
+              >
+                {catName} ({count})
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Push-to-CRM Category & Stage Selector Bar */}
+        {canImportLeads && leads.length > 0 && (
+          <div className="p-3.5 rounded-xl bg-emerald-500/5 border border-emerald-500/20 grid grid-cols-1 md:grid-cols-12 gap-2.5 items-end text-xs">
+            <div className="md:col-span-4">
+              <label className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1 mb-1">
+                <Tag className="w-3 h-3" />
+                <span>Push Category (Assigned in CRM Leads)</span>
+              </label>
+              <select
+                value={pushCategoryMode}
+                onChange={(e) => setPushCategoryMode(e.target.value)}
+                className={inputCls}
+              >
+                <option value="__AUTO__">Use Each Lead&apos;s Own Category</option>
+                {categoryChoices.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+                <option value="__CUSTOM__">+ Custom Category Name...</option>
+              </select>
+            </div>
+
+            {pushCategoryMode === '__CUSTOM__' && (
+              <div className="md:col-span-3">
+                <label className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300 block mb-1">
+                  Custom Category Label
+                </label>
+                <input
+                  value={customPushCategory}
+                  onChange={(e) => setCustomPushCategory(e.target.value)}
+                  placeholder="e.g. Healthcare Mumbai"
+                  className={inputCls}
+                />
+              </div>
+            )}
+
+            <div className={pushCategoryMode === '__CUSTOM__' ? 'md:col-span-2' : 'md:col-span-3'}>
+              <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                CRM Stage
+              </label>
+              <select
+                value={pushStage}
+                onChange={(e) => setPushStage(e.target.value)}
+                className={inputCls}
+              >
+                {stageNames.map((st) => (
+                  <option key={st} value={st}>
+                    {st}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className={pushCategoryMode === '__CUSTOM__' ? 'md:col-span-3' : 'md:col-span-2'}>
+              <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                CRM Source
+              </label>
+              <select
+                value={pushSource}
+                onChange={(e) => setPushSource(e.target.value)}
+                className={inputCls}
+              >
+                {sourceNames.map((src) => (
+                  <option key={src} value={src}>
+                    {src}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className={pushCategoryMode === '__CUSTOM__' ? 'md:col-span-12 flex justify-end' : 'md:col-span-3'}>
+              <button
+                type="button"
+                disabled={selectedIds.length === 0}
+                onClick={handleImportSelected}
+                className="w-full md:w-auto flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-xs font-bold shadow-xs transition-colors"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>Push Selected to CRM ({selectedIds.length})</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* KPI Strip + AI Verifier / CSV / Clear */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
           <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
             <span className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200">
-              Found: {stats.total}
-            </span>
-            <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-              MX Verified Emails: {stats.mxVerified}
+              Showing: {stats.total}
             </span>
             <span className="px-2.5 py-1 rounded-lg bg-sky-500/10 text-sky-600 dark:text-sky-400">
               Valid Phones: {stats.withPhone}
+            </span>
+            <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+              MX Verified Emails: {stats.mxVerified}
             </span>
             <span className="px-2.5 py-1 rounded-lg bg-violet-500/10 text-violet-600 dark:text-violet-400">
               AI Scored: {stats.aiScored}
@@ -698,7 +1001,7 @@ export const AiAgentsView: React.FC = () => {
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              disabled={leads.length === 0 || isVerifyingAi}
+              disabled={filteredLeads.length === 0 || isVerifyingAi}
               onClick={handleRunAiVerifier}
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-xs font-bold shadow-xs transition-colors"
             >
@@ -715,19 +1018,7 @@ export const AiAgentsView: React.FC = () => {
               )}
             </button>
 
-            {canImportLeads && (
-              <button
-                type="button"
-                disabled={selectedIds.length === 0}
-                onClick={handleImportSelected}
-                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-xs font-bold shadow-xs transition-colors"
-              >
-                <UserPlus className="w-3.5 h-3.5" />
-                <span>Import Selected ({selectedIds.length})</span>
-              </button>
-            )}
-
-            {canExportCsv && leads.length > 0 && (
+            {canExportCsv && filteredLeads.length > 0 && (
               <button
                 type="button"
                 onClick={handleExportCsv}
@@ -738,32 +1029,55 @@ export const AiAgentsView: React.FC = () => {
               </button>
             )}
 
-            {leads.length > 0 && (
-              <button
-                type="button"
-                onClick={() => {
-                  persistLeads([]);
-                  setSelectedIds([]);
-                }}
-                className="p-2 rounded-xl border border-rose-500/20 text-rose-500 hover:bg-rose-500/10"
-                title="Clear staging results"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            )}
+            {leads.length > 0 &&
+              (confirmClearAll ? (
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      persistLeads([]);
+                      setSelectedIds([]);
+                      setActiveCategoryFilter('ALL');
+                      setPageCursorByQuery({});
+                      setHasMoreByQuery({});
+                      setConfirmClearAll(false);
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-[11px] font-bold"
+                  >
+                    Confirm Clear All
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmClearAll(false)}
+                    className="px-2 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-[11px] font-bold text-slate-500"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmClearAll(true)}
+                  className="flex items-center gap-1 px-2.5 py-2 rounded-xl border border-rose-500/20 text-rose-500 hover:bg-rose-500/10 text-xs font-bold"
+                  title="Clear all staging leads"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Clear</span>
+                </button>
+              ))}
           </div>
         </div>
 
-        {/* Filter Pills */}
+        {/* Sub-Filter Pills */}
         {leads.length > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap gap-1.5">
               {(
                 [
-                  ['all', `All (${leads.length})`],
+                  ['all', `All (${filteredLeads.length})`],
                   ['verified', 'Verified Only'],
-                  ['email', 'Has Email'],
                   ['phone', 'Has Phone'],
+                  ['email', 'Has Email'],
                   ['new', 'Not in CRM Yet'],
                 ] as const
               ).map(([id, label]) => (
@@ -785,27 +1099,27 @@ export const AiAgentsView: React.FC = () => {
             {canImportLeads && (
               <button
                 type="button"
-                onClick={handleSelectAllImportable}
+                onClick={handleSelectAllFilteredImportable}
                 className="text-[11px] font-bold text-sky-600 dark:text-sky-400 hover:underline"
               >
-                {selectedIds.length > 0 ? 'Unselect All' : 'Select All New Leads'}
+                Select / Unselect All New in View
               </button>
             )}
           </div>
         )}
 
-        {/* Table / Empty State */}
+        {/* Lead Cards List */}
         {filteredLeads.length === 0 ? (
           <div className="py-10 text-center space-y-2">
             <Cpu className="w-9 h-9 text-slate-300 dark:text-slate-700 mx-auto" />
             <p className="text-xs font-bold text-slate-600 dark:text-slate-300">
               {leads.length === 0
-                ? 'No discovered leads in staging yet'
+                ? 'No discovered leads saved yet'
                 : 'No leads match the selected filter'}
             </p>
             <p className="text-[11px] text-slate-500 dark:text-slate-400 max-w-md mx-auto">
-              Enter a Business Category and City above, click <strong>Find Leads</strong>, run the{' '}
-              <strong>AI Verifier Agent</strong>, and import only clean verified businesses to your CRM.
+              Search any Business Category &amp; City above — exact lead count will be fetched from
+              Google Maps and added safely without removing your earlier searches.
             </p>
           </div>
         ) : (
@@ -813,6 +1127,7 @@ export const AiAgentsView: React.FC = () => {
             {filteredLeads.map((lead) => {
               const dup = isDuplicateInCrm(lead);
               const checked = selectedIds.includes(lead.id);
+              const waDigits = normalizeDigits(lead.whatsapp || lead.phone);
               return (
                 <div
                   key={lead.id}
@@ -823,8 +1138,8 @@ export const AiAgentsView: React.FC = () => {
                   }`}
                 >
                   <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-3">
-                    {/* Left: Checkbox + Business Info */}
-                    <div className="flex items-start gap-3 min-w-0">
+                    {/* Left: Checkbox + Full Business Details */}
+                    <div className="flex items-start gap-3 min-w-0 flex-1">
                       <input
                         type="checkbox"
                         disabled={dup || !canImportLeads}
@@ -832,14 +1147,21 @@ export const AiAgentsView: React.FC = () => {
                         onChange={() => toggleSelect(lead.id)}
                         className="mt-1 w-4 h-4 rounded accent-sky-500 shrink-0 disabled:opacity-40"
                       />
-                      <div className="space-y-1 min-w-0">
+                      <div className="space-y-1.5 min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white truncate">
+                          <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white">
                             {lead.name}
                           </h3>
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 capitalize">
-                            {lead.category}
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/10 text-indigo-600 dark:text-indigo-300">
+                            {lead.searchCategory || lead.category}
                           </span>
+                          {lead.category &&
+                            lead.searchCategory &&
+                            lead.category.toLowerCase() !== lead.searchCategory.toLowerCase() && (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400">
+                                {lead.category}
+                              </span>
+                            )}
                           <span
                             className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                               lead.verificationStatus === 'Verified'
@@ -860,18 +1182,23 @@ export const AiAgentsView: React.FC = () => {
                             <span className="inline-flex items-center gap-0.5 text-[11px] font-bold text-amber-500">
                               <Star className="w-3 h-3 fill-amber-400" />
                               {lead.rating}
-                              {lead.reviewsCount ? ` (${lead.reviewsCount})` : ''}
+                              {lead.reviewsCount ? ` (${lead.reviewsCount} reviews)` : ''}
                             </span>
                           )}
                         </div>
 
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1">
-                          <MapPin className="w-3 h-3 shrink-0 text-slate-400" />
-                          <span className="truncate">{lead.address}</span>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 flex items-start gap-1">
+                          <MapPin className="w-3 h-3 shrink-0 text-slate-400 mt-0.5" />
+                          <span>
+                            {lead.address}
+                            {lead.city && !lead.address.toLowerCase().includes(lead.city.toLowerCase())
+                              ? `, ${lead.city}`
+                              : ''}
+                          </span>
                         </p>
 
-                        {/* Contact Badges */}
-                        <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
+                        {/* Complete Contact & Links Strip */}
+                        <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[11px]">
                           {lead.phone ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-sky-500/10 text-sky-700 dark:text-sky-300 font-semibold">
                               <Phone className="w-3 h-3" />
@@ -879,6 +1206,18 @@ export const AiAgentsView: React.FC = () => {
                             </span>
                           ) : (
                             <span className="text-slate-400">No Phone</span>
+                          )}
+
+                          {waDigits.length >= 10 && (
+                            <a
+                              href={`https://wa.me/91${waDigits}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20 font-semibold"
+                            >
+                              <MessageSquare className="w-3 h-3" />
+                              <span>WhatsApp</span>
+                            </a>
                           )}
 
                           {lead.email ? (
@@ -911,15 +1250,59 @@ export const AiAgentsView: React.FC = () => {
                               <ExternalLink className="w-2.5 h-2.5" />
                             </a>
                           )}
+
+                          {lead.googleMapsUrl && (
+                            <a
+                              href={lead.googleMapsUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-rose-500/10 text-rose-600 dark:text-rose-300 hover:bg-rose-500/20 font-semibold"
+                            >
+                              <MapPin className="w-3 h-3" />
+                              <span>Maps</span>
+                              <ExternalLink className="w-2.5 h-2.5" />
+                            </a>
+                          )}
+
+                          {lead.socials?.instagram && (
+                            <a
+                              href={lead.socials.instagram}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="px-2 py-0.5 rounded-lg bg-pink-500/10 text-pink-600 dark:text-pink-300 font-semibold"
+                            >
+                              Instagram
+                            </a>
+                          )}
+                          {lead.socials?.facebook && (
+                            <a
+                              href={lead.socials.facebook}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="px-2 py-0.5 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-300 font-semibold"
+                            >
+                              Facebook
+                            </a>
+                          )}
+                          {lead.socials?.linkedin && (
+                            <a
+                              href={lead.socials.linkedin}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="px-2 py-0.5 rounded-lg bg-sky-600/10 text-sky-700 dark:text-sky-300 font-semibold"
+                            >
+                              LinkedIn
+                            </a>
+                          )}
                         </div>
                       </div>
                     </div>
 
-                    {/* Right: AI Score & Opportunity */}
+                    {/* Right: AI Score, Pitch & Remove */}
                     <div className="flex flex-col sm:items-end gap-1.5 shrink-0 lg:max-w-xs">
-                      {typeof lead.aiScore === 'number' ? (
-                        <>
-                          <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5">
+                        {typeof lead.aiScore === 'number' ? (
+                          <>
                             <span
                               className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
                                 lead.priority === 'Hot'
@@ -938,20 +1321,28 @@ export const AiAgentsView: React.FC = () => {
                                 className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-violet-500/15 hover:bg-violet-500/25 text-violet-600 dark:text-violet-300 text-[11px] font-bold"
                               >
                                 <Sparkles className="w-3 h-3" />
-                                <span>View AI Pitch</span>
+                                <span>Pitch</span>
                               </button>
                             )}
-                          </div>
-                          {lead.opportunity && (
-                            <p className="text-[11px] text-slate-500 dark:text-slate-400 sm:text-right">
-                              {lead.opportunity}
-                            </p>
-                          )}
-                        </>
-                      ) : (
-                        <span className="text-[11px] text-slate-400 italic">
-                          Run AI Verifier for score &amp; pitch
-                        </span>
+                          </>
+                        ) : (
+                          <span className="text-[11px] text-slate-400 italic">
+                            Ready for AI Verifier
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveOneLead(lead.id)}
+                          className="p-1 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-500/10"
+                          title="Remove from staging list"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      {lead.opportunity && (
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 sm:text-right">
+                          {lead.opportunity}
+                        </p>
                       )}
                     </div>
                   </div>
@@ -993,7 +1384,9 @@ export const AiAgentsView: React.FC = () => {
                     onClick={() =>
                       copyText(
                         'email',
-                        `Subject: ${pitchModalLead.pitchEmailSubject || ''}\n\n${pitchModalLead.pitchEmailBody || ''}`
+                        `Subject: ${pitchModalLead.pitchEmailSubject || ''}\n\n${
+                          pitchModalLead.pitchEmailBody || ''
+                        }`
                       )
                     }
                     className="flex items-center gap-1 text-[11px] font-bold text-sky-600 dark:text-sky-400"
