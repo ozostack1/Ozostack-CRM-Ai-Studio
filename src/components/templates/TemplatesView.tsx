@@ -29,6 +29,7 @@ import { useOutreachTemplates, INITIAL_TEMPLATES } from '../../data/templateData
 import { useTheme } from '../../context/ThemeContext';
 import { TemplateModal } from './TemplateModal';
 import { TemplatePreviewModal } from './TemplatePreviewModal';
+import { DesignerEmailStudio } from './DesignerEmailStudio';
 
 const CATEGORIES: TemplateCategory[] = [
   'Cold Outreach',
@@ -49,6 +50,10 @@ export const TemplatesView: React.FC = () => {
     duplicateTemplate,
     incrementUseCount,
   } = useOutreachTemplates();
+
+  // Active top workspace mode: Standard Templates | AI Designer Email Studio | Email Campaigns
+  const [studioTab, setStudioTab] = useState<'templates' | 'designer' | 'campaign'>('templates');
+  const [campaignLaunchTplId, setCampaignLaunchTplId] = useState<string | null>(null);
 
   // Active channel tab
   const [selectedChannel, setSelectedChannel] = useState<'all' | 'email' | 'whatsapp'>('all');
@@ -210,6 +215,66 @@ export const TemplatesView: React.FC = () => {
         </div>
       </div>
 
+      {/* Top Mode Switcher: Standard Templates | AI Designer Studio | Email Campaigns */}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setStudioTab('templates')}
+          className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+            studioTab === 'templates'
+              ? 'bg-sky-500 text-white shadow-xs'
+              : isDark
+              ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+              : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+          }`}
+        >
+          <Layers className="w-3.5 h-3.5" />
+          <span>Quick Templates ({stats.total})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setStudioTab('designer')}
+          className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+            studioTab === 'designer'
+              ? 'bg-violet-600 text-white shadow-xs'
+              : isDark
+              ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+              : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+          }`}
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+          <span>AI Designer Email Studio</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setStudioTab('campaign')}
+          className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+            studioTab === 'campaign'
+              ? 'bg-emerald-500 text-white shadow-xs'
+              : isDark
+              ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+              : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+          }`}
+        >
+          <Send className="w-3.5 h-3.5" />
+          <span>Email Campaigns (Auto Delay)</span>
+        </button>
+      </div>
+
+      {studioTab !== 'templates' ? (
+        <DesignerEmailStudio
+          mode={studioTab}
+          initialCampaignTemplateId={campaignLaunchTplId}
+          onSwitchToCampaign={(tplId) => {
+            setCampaignLaunchTplId(tplId);
+            setStudioTab('campaign');
+          }}
+          onNotify={showToast}
+        />
+      ) : (
+        <>
       {/* KPI Ribbon */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div
@@ -540,6 +605,8 @@ export const TemplatesView: React.FC = () => {
         template={previewTemplate}
         onUsed={(id) => incrementUseCount(id)}
       />
+        </>
+      )}
 
       {/* Toast Feedback */}
       {toastMessage && (

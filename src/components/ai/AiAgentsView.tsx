@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   Check,
@@ -15,10 +15,12 @@ import {
   MapPin,
   MessageSquare,
   Phone,
+  Play,
   Plus,
   Search,
   ShieldCheck,
   Sparkles,
+  Square,
   Star,
   Tag,
   Trash2,
@@ -28,6 +30,16 @@ import {
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useCrmConfig } from '../../data/crmConfig';
+import { sendDirectEmail } from '../../data/emailService';
+import {
+  appendCampaignLog,
+  DesignerEmailTemplate,
+  isValidLeadEmail,
+  loadDesignerTemplates,
+  personalizeDesignerEmail,
+  saveDesignerTemplates,
+  sleepCancellable,
+} from '../../data/designerEmailService';
 import { Lead } from '../../types/crm';
 
 interface DiscoveredLead {
@@ -158,6 +170,25 @@ export const AiAgentsView: React.FC = () => {
   const [crmLeadsTick, setCrmLeadsTick] = useState(0);
   const [banner, setBanner] = useState<{ type: 'ok' | 'err' | 'info'; text: string } | null>(null);
 
+  // Direct Designer Email Campaign & 1-Push Auto-Send State
+  const [designerTemplates, setDesignerTemplates] = useState<DesignerEmailTemplate[]>(() =>
+    loadDesignerTemplates(userId)
+  );
+  const [selectedDesignerTplId, setSelectedDesignerTplId] = useState<string>(
+    () => loadDesignerTemplates(userId)[0]?.id || ''
+  );
+  const [campaignDelaySec, setCampaignDelaySec] = useState<number>(4);
+  const [autoEmailOnPush, setAutoEmailOnPush] = useState<boolean>(false);
+  const [isEmailCampaignRunning, setIsEmailCampaignRunning] = useState(false);
+  const [emailCampaignStatus, setEmailCampaignStatus] = useState<{
+    total: number;
+    sent: number;
+    failed: number;
+    label: string;
+    emailedIds: string[];
+  } | null>(null);
+  const stopEmailCampaignRef = useRef(false);
+
   const showBanner = (type: 'ok' | 'err' | 'info', text: string) => {
     setBanner({ type, text });
     setTimeout(() => setBanner((prev) => (prev?.text === text ? null : prev)), 6500);
@@ -192,7 +223,23 @@ export const AiAgentsView: React.FC = () => {
     setConfirmClearAll(false);
     setPageCursorByQuery({});
     setHasMoreByQuery({});
+    const loadedTpls = loadDesignerTemplates(userId);
+    setDesignerTemplates(loadedTpls);
+    setSelectedDesignerTplId(loadedTpls[0]?.id || '');
+    setEmailCampaignStatus(null);
     setCrmLeadsTick((t) => t + 1);
+  }, [userId]);
+
+  useEffect(() => {
+    const onTplChange = () => {
+      const next = loadDesignerTemplates(userId);
+      setDesignerTemplates(next);
+      setSelectedDesignerTplId((prev) =>
+        next.some((t) => t.id === prev) ? prev : next[0]?.id || ''
+      );
+    };
+    window.addEventListener('ozostack-designer-templates-changed', onTplChange);
+    return () => window.removeEventListener('ozostack-designer-templates-changed', onTplChange);
   }, [userId]);
 
   const persistLeads = (next: DiscoveredLead[]) => {
@@ -535,11 +582,140 @@ export const AiAgentsView: React.FC = () => {
 
     setSelectedIds([]);
     setCrmLeadsTick((t) => t + 1);
+
+    if (autoEmailOnPush) {
+      const emailTargets = chosen.filter((item) => isValidLeadEmail(item.email));
+      showBanner(
+        'ok',
+        `Pushed ${newCrmLeads.length} lead(s) to CRM! Starting auto Designer Email campaign (${campaignDelaySec}s delay) for ${emailTargets.length} lead(s) with valid emails...`
+      );
+      if (emailTargets.length > 0) {
+        runDirectDesignerEmailCampaign(emailTargets, 'Auto-Push Campaign');
+      }
+    } else {
+      showBanner(
+        'ok',
+        `Pushed ${newCrmLeads.length} lead(s) into CRM Leads under Stage "${pushStage}"${
+          resolvedCustomCat ? ` & Category "${resolvedCustomCat}"` : ''
+        } with full business details!`
+      );
+    }
+  };
+
+  const runDirectDesignerEmailCampaign = async (
+    targetLeads: DiscoveredLead[],
+    sourceLabel: 'AI Agents' | 'Auto-Push Campaign' = 'AI Agents'
+  ) => {
+    const chosenTpl = designerTemplates.find((t) => t.id === selectedDesignerTplId);
+    if (!chosenTpl) {
+      showBanner('err', 'Select a Designer Email Template first (create one in Outreach Templates → AI Designer Studio).');
+      return;
+    }
+    const validTargets = targetLeads.filter((l) => isValidLeadEmail(l.email));
+    if (validTargets.length === 0) {
+      showBanner('info', 'None of the selected leads have a valid public email address.');
+      return;
+    }
+
+    stopEmailCampaignRef.current = false;
+    setIsEmailCampaignRunning(true);
+    let sent = 0;
+    let failed = 0;
+    const emailedIds: string[] = [];
+
+    setEmailCampaignStatus({
+      total: validTargets.length,
+      sent: 0,
+      failed: 0,
+      label: `Starting Designer Email campaign for ${validTargets.length} business(es)...`,
+      emailedIds: [],
+    });
+
+    for (let i = 0; i < validTargets.length; i++) {
+      if (stopEmailCampaignRef.current) break;
+      const item = validTargets[i];
+      setEmailCampaignStatus({
+        total: validTargets.length,
+        sent,
+        failed,
+        label: `Sending (${i + 1}/${validTargets.length}) to ${item.name} <${item.email}>...`,
+        emailedIds: [...emailedIds],
+      });
+
+      const personalized = personalizeDesignerEmail(chosenTpl, {
+        name: item.name,
+        company: item.name,
+        category: item.searchCategory || item.category,
+        city: item.city,
+        owner: currentUser?.name || 'OzoStack Team',
+      });
+
+      const res = await sendDirectEmail({
+        to: item.email.trim(),
+        recipientName: item.name,
+        subject: personalized.subject,
+        body: personalized.plainText,
+        html: personalized.html,
+        allowGmailFallback: false,
+      });
+
+      if (res.ok) {
+        sent += 1;
+        emailedIds.push(item.id);
+      } else {
+        failed += 1;
+      }
+
+      setEmailCampaignStatus({
+        total: validTargets.length,
+        sent,
+        failed,
+        label:
+          i < validTargets.length - 1 && !stopEmailCampaignRef.current
+            ? `Safe ${campaignDelaySec}s pause before next email... (${sent} sent)`
+            : 'Finishing campaign...',
+        emailedIds: [...emailedIds],
+      });
+
+      if (i < validTargets.length - 1 && !stopEmailCampaignRef.current) {
+        await sleepCancellable(campaignDelaySec * 1000, () => stopEmailCampaignRef.current);
+      }
+    }
+
+    appendCampaignLog(
+      {
+        id: `camp-ag-${Date.now()}`,
+        templateName: chosenTpl.name,
+        subject: chosenTpl.subject,
+        source: sourceLabel,
+        total: validTargets.length,
+        sent,
+        failed,
+        delaySeconds: campaignDelaySec,
+        timestamp: new Date().toLocaleString(),
+      },
+      userId
+    );
+
+    const bumped = designerTemplates.map((t) =>
+      t.id === chosenTpl.id ? { ...t, useCount: (t.useCount || 0) + sent } : t
+    );
+    setDesignerTemplates(bumped);
+    saveDesignerTemplates(bumped, userId);
+
+    setIsEmailCampaignRunning(false);
+    setEmailCampaignStatus({
+      total: validTargets.length,
+      sent,
+      failed,
+      label: stopEmailCampaignRef.current
+        ? `Stopped (${sent} delivered, ${failed} failed)`
+        : `Campaign complete! ${sent} delivered, ${failed} failed.`,
+      emailedIds: [...emailedIds],
+    });
     showBanner(
-      'ok',
-      `Pushed ${newCrmLeads.length} lead(s) into CRM Leads under Stage "${pushStage}"${
-        resolvedCustomCat ? ` & Category "${resolvedCustomCat}"` : ''
-      } with full business details!`
+      failed > 0 && sent === 0 ? 'err' : 'ok',
+      `Designer Email Campaign finished: ${sent} delivered, ${failed} failed.`
     );
   };
 
@@ -1043,14 +1219,159 @@ export const AiAgentsView: React.FC = () => {
             <div className={pushCategoryMode === '__CUSTOM__' ? 'md:col-span-12 flex justify-end' : 'md:col-span-3'}>
               <button
                 type="button"
-                disabled={selectedIds.length === 0}
+                disabled={selectedIds.length === 0 || isEmailCampaignRunning}
                 onClick={handleImportSelected}
                 className="w-full md:w-auto flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-xs font-bold shadow-xs transition-colors"
               >
                 <UserPlus className="w-3.5 h-3.5" />
-                <span>Push Selected to CRM ({selectedIds.length})</span>
+                <span>
+                  {autoEmailOnPush
+                    ? `Push & Auto-Email (${selectedIds.length})`
+                    : `Push Selected to CRM (${selectedIds.length})`}
+                </span>
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Direct Designer Email Campaign & Auto-Send Automation Bar */}
+        {leads.length > 0 && (
+          <div className="p-3.5 rounded-xl bg-violet-500/5 border border-violet-500/20 space-y-2.5 text-xs">
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-2.5 items-end">
+              <div className="md:col-span-5">
+                <label className="text-[11px] font-bold text-violet-700 dark:text-violet-300 flex items-center gap-1 mb-1">
+                  <Mail className="w-3 h-3" />
+                  <span>Designer Email Template (Outreach Templates → AI Designer Studio)</span>
+                </label>
+                <select
+                  value={selectedDesignerTplId}
+                  disabled={isEmailCampaignRunning}
+                  onChange={(e) => setSelectedDesignerTplId(e.target.value)}
+                  className={inputCls}
+                >
+                  {designerTemplates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="text-[11px] font-bold text-slate-600 dark:text-slate-300 block mb-1">
+                  Safe Pause
+                </label>
+                <select
+                  value={campaignDelaySec}
+                  disabled={isEmailCampaignRunning}
+                  onChange={(e) => setCampaignDelaySec(Number(e.target.value))}
+                  className={inputCls}
+                >
+                  <option value={3}>3 sec</option>
+                  <option value={4}>4 sec (Safe)</option>
+                  <option value={5}>5 sec</option>
+                  <option value={8}>8 sec</option>
+                </select>
+              </div>
+
+              <div className="md:col-span-5 flex flex-wrap items-center justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={isEmailCampaignRunning}
+                  onClick={() => {
+                    const withEmailIds = filteredLeads
+                      .filter((l) => isValidLeadEmail(l.email))
+                      .map((l) => l.id);
+                    setSelectedIds(withEmailIds);
+                  }}
+                  className="px-3 py-2 rounded-xl border border-violet-500/30 text-violet-700 dark:text-violet-300 hover:bg-violet-500/10 text-[11px] font-bold"
+                >
+                  Select All With Email
+                </button>
+
+                {isEmailCampaignRunning ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      stopEmailCampaignRef.current = true;
+                    }}
+                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold"
+                  >
+                    <Square className="w-3.5 h-3.5" />
+                    <span>Stop Sending</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={
+                      leads.filter((l) => selectedIds.includes(l.id) && isValidLeadEmail(l.email))
+                        .length === 0
+                    }
+                    onClick={() =>
+                      runDirectDesignerEmailCampaign(
+                        leads.filter((l) => selectedIds.includes(l.id)),
+                        'AI Agents'
+                      )
+                    }
+                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-xs font-bold shadow-xs"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                    <span>
+                      Send Designer Mail (
+                      {
+                        leads.filter((l) => selectedIds.includes(l.id) && isValidLeadEmail(l.email))
+                          .length
+                      }
+                      )
+                    </span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-violet-500/15">
+              <label className="flex items-center gap-2 text-[11px] font-semibold text-slate-600 dark:text-slate-300 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={autoEmailOnPush}
+                  disabled={isEmailCampaignRunning}
+                  onChange={(e) => setAutoEmailOnPush(e.target.checked)}
+                  className="rounded accent-violet-600"
+                />
+                <span>
+                  1-Push Automation: Automatically send this Designer Email ({campaignDelaySec}s
+                  pause) to all pushed leads with valid emails
+                </span>
+              </label>
+            </div>
+
+            {emailCampaignStatus && (
+              <div className="p-3 rounded-xl bg-white/80 dark:bg-slate-900/70 border border-violet-500/20 space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-bold">
+                  <span className="text-violet-700 dark:text-violet-300 flex items-center gap-1.5">
+                    {isEmailCampaignRunning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    {emailCampaignStatus.label}
+                  </span>
+                  <span>
+                    Sent: <strong className="text-emerald-600">{emailCampaignStatus.sent}</strong> ·
+                    Failed: <strong className="text-rose-500">{emailCampaignStatus.failed}</strong> /{' '}
+                    {emailCampaignStatus.total}
+                  </span>
+                </div>
+                <div className="w-full h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                  <div
+                    className="h-full bg-violet-600 transition-all duration-300"
+                    style={{
+                      width: `${Math.round(
+                        ((emailCampaignStatus.sent + emailCampaignStatus.failed) /
+                          Math.max(1, emailCampaignStatus.total)) *
+                          100
+                      )}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1223,7 +1544,7 @@ export const AiAgentsView: React.FC = () => {
                     <div className="flex items-start gap-3 min-w-0 flex-1">
                       <input
                         type="checkbox"
-                        disabled={dup || !canImportLeads}
+                        disabled={isEmailCampaignRunning}
                         checked={checked}
                         onChange={() => toggleSelect(lead.id)}
                         className="mt-1 w-4 h-4 rounded accent-sky-500 shrink-0 disabled:opacity-40"
@@ -1233,6 +1554,11 @@ export const AiAgentsView: React.FC = () => {
                           <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white">
                             {lead.name}
                           </h3>
+                          {emailCampaignStatus?.emailedIds.includes(lead.id) && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500 text-white">
+                              Emailed ✓
+                            </span>
+                          )}
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/10 text-indigo-600 dark:text-indigo-300">
                             {lead.searchCategory || lead.category}
                           </span>

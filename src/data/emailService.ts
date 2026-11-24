@@ -680,6 +680,7 @@ export async function sendDirectEmail(params: {
   bcc?: string;
   subject: string;
   body: string;
+  html?: string;
   recipientName?: string;
   allowGmailFallback?: boolean;
 }): Promise<{
@@ -732,6 +733,7 @@ export async function sendDirectEmail(params: {
         bcc: params.bcc,
         subject,
         text: body,
+        html: params.html || undefined,
         replyTo: config.replyToEmail || config.senderEmail,
         smtpConfig: config,
       }),
@@ -764,6 +766,7 @@ export async function sendDirectEmail(params: {
           bcc: params.bcc,
           subject,
           body,
+          html: params.html || undefined,
           read: true,
           starred: false,
           deliveryStatus: 'Delivered via Live SMTP',
