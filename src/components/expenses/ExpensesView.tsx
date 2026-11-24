@@ -30,11 +30,6 @@ import {
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import {
-  INITIAL_EXPENSES,
-  INITIAL_EXPENSE_VENDORS,
-  INITIAL_EXPENSE_BUDGETS,
-} from '../../data/mockData';
-import {
   ExpenseItem,
   ExpenseCategory,
   ExpenseStatus,
@@ -45,19 +40,19 @@ import {
 import { RecordExpenseModal } from './RecordExpenseModal';
 import { ExpenseDetailsDrawer } from './ExpenseDetailsDrawer';
 import { useSystemCurrency, formatMoney } from '../../data/currencyService';
+import { FinanceTimePeriod, isDateInFinancePeriod } from '../../data/financeUtils';
 
 const LOCAL_STORAGE_KEY = 'ozostack_expenses';
 
 type HorizontalTab = 'ledger' | 'analytics' | 'vendors' | 'budgets';
-type TimePeriod = 'This Month' | 'This Quarter' | 'YTD 2025' | 'All Time';
+type TimePeriod = FinanceTimePeriod;
 
 export const ExpensesView: React.FC = () => {
   const { theme, setActiveNav } = useTheme();
   const isLight = theme === 'white-sky';
   const currency = useSystemCurrency();
 
-  // Persistence
-  const [expenses, setExpenses] = useState<ExpenseItem[]>(() => {
+  const loadExpenses = (): ExpenseItem[] => {
     try {
       const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
       if (stored !== null) {
@@ -67,8 +62,21 @@ export const ExpensesView: React.FC = () => {
     } catch (e) {
       console.error('Failed to parse stored expenses', e);
     }
-    return INITIAL_EXPENSES;
-  });
+    return [];
+  };
+
+  // Persistence (zero mock data fallback)
+  const [expenses, setExpenses] = useState<ExpenseItem[]>(loadExpenses);
+
+  useEffect(() => {
+    const onSync = () => setExpenses(loadExpenses());
+    window.addEventListener('storage', onSync);
+    window.addEventListener('ozostack-crm-config-changed', onSync);
+    return () => {
+      window.removeEventListener('storage', onSync);
+      window.removeEventListener('ozostack-crm-config-changed', onSync);
+    };
+  }, []);
 
   const [activeTab, setActiveTab] = useState<HorizontalTab>('ledger');
   const [layoutMode, setLayoutMode] = useState<'table' | 'cards'>('table');
@@ -77,7 +85,7 @@ export const ExpensesView: React.FC = () => {
   const [selectedStatus, setSelectedStatus] = useState<string>('All');
   const [selectedDepartment, setSelectedDepartment] = useState<string>('All');
   const [selectedBillable, setSelectedBillable] = useState<string>('All');
-  const [selectedPeriod, setSelectedPeriod] = useState<TimePeriod>('This Month');
+  const [selectedPeriod, setSelectedPeriod] = useState<TimePeriod>('All Time');
 
   // Modals & Drawer State
   const [isRecordModalOpen, setIsRecordModalOpen] = useState(false);
@@ -161,14 +169,55 @@ export const ExpensesView: React.FC = () => {
     );
   };
 
-  // Date period checker
-  const isDateInPeriod = (dateStr: string, period: TimePeriod): boolean => {
-    if (period === 'All Time') return true;
-    if (period === 'This Month') return dateStr.startsWith('2025-05');
-    if (period === 'This Quarter') return dateStr >= '2025-04-01' && dateStr <= '2025-06-30';
-    if (period === 'YTD 2025') return dateStr.startsWith('2025');
-    return true;
-  };
+  // Date period checker (uses real current month / quarter / year)
+  const isDateInPeriod = (dateStr: string, period: TimePeriod): boolean =>
+    isDateInFinancePeriod(dateStr, period);
+
+  // Live Vendors & Budgets derived strictly from real expenses
+  const liveVendors = useMemo<ExpenseVendorSummary[]>(() => {
+    const map = new Map<string, ExpenseVendorSummary>();
+    for (const it of expenses) {
+      const vName = it.vendor || 'General Vendor';
+      const existing = map.get(vName);
+      if (!existing) {
+        map.set(vName, {
+          vendor: vName,
+          category: it.category,
+          monthlyCost: it.isRecurring ? it.amount : 0,
+          totalYtd: it.amount,
+          renewalCadence: it.isRecurring
+            ? it.recurringInterval === 'Annual'
+              ? 'Annual'
+              : 'Monthly'
+            : 'On-Demand',
+          activeSubscriptions: 1,
+          paymentMethod: it.paymentMethod,
+          lastPaymentDate: it.date,
+        });
+      } else {
+        existing.totalYtd += it.amount;
+        existing.activeSubscriptions += 1;
+        if (it.isRecurring) existing.monthlyCost += it.amount;
+        if (it.date > existing.lastPaymentDate) existing.lastPaymentDate = it.date;
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.totalYtd - a.totalYtd);
+  }, [expenses]);
+
+  const liveBudgets = useMemo<ExpenseBudgetCategory[]>(() => {
+    const map = new Map<string, { dept: ExpenseDepartment; spend: number }>();
+    for (const it of expenses) {
+      const prev = map.get(it.category) || { dept: it.department, spend: 0 };
+      prev.spend += it.amount;
+      map.set(it.category, prev);
+    }
+    return Array.from(map.entries()).map(([cat, info]) => ({
+      category: cat as ExpenseCategory,
+      department: info.dept,
+      monthlyBudget: Math.max(info.spend, 10000),
+      actualSpend: info.spend,
+    }));
+  }, [expenses]);
 
   // Filtered expenses
   const filteredExpenses = useMemo(() => {
@@ -405,7 +454,7 @@ export const ExpensesView: React.FC = () => {
           </div>
           <div className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 mt-1">
             <TrendingDown className="w-3.5 h-3.5" />
-            <span>-4.2% MoM burn reduction</span>
+            <span>{filteredExpenses.length > 0 ? 'Live tracked OPEX' : 'No expenses recorded yet'}</span>
           </div>
           <span className="text-[10px] text-slate-400 block mt-0.5">
             {filteredExpenses.length} disbursements in {selectedPeriod}
@@ -519,7 +568,7 @@ export const ExpensesView: React.FC = () => {
               }`}
           >
             <Building className="w-4 h-4" />
-            <span>Vendors & Subscriptions ({INITIAL_EXPENSE_VENDORS.length})</span>
+            <span>Vendors & Subscriptions ({liveVendors.length})</span>
           </button>
 
           <button
@@ -536,7 +585,7 @@ export const ExpensesView: React.FC = () => {
 
         {/* Time Period Filter Pills */}
         <div className="flex items-center gap-1 shrink-0">
-          {(['This Month', 'This Quarter', 'YTD 2025', 'All Time'] as TimePeriod[]).map((period) => (
+          {(['This Month', 'This Quarter', 'YTD', 'All Time'] as TimePeriod[]).map((period) => (
             <button
               key={period}
               onClick={() => setSelectedPeriod(period)}
@@ -1000,8 +1049,13 @@ export const ExpensesView: React.FC = () => {
       {/* TAB 3: VENDORS & SUBSCRIPTIONS */}
       {activeTab === 'vendors' && (
         <div className="space-y-3">
+          {liveVendors.length === 0 ? (
+            <div className={`p-10 rounded-2xl border text-center text-xs text-slate-500 ${cardBg}`}>
+              No vendors yet. Record an expense to automatically track vendors and subscriptions here.
+            </div>
+          ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {INITIAL_EXPENSE_VENDORS.map((v) => (
+            {liveVendors.map((v) => (
               <div key={v.vendor} className={`p-4 rounded-2xl border space-y-3 ${cardBg}`}>
                 <div className="flex items-center justify-between">
                   <div className="w-8 h-8 rounded-xl bg-sky-500/10 text-sky-600 dark:text-sky-400 flex items-center justify-center font-bold">
@@ -1019,19 +1073,19 @@ export const ExpensesView: React.FC = () => {
 
                 <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800 space-y-1.5 text-xs">
                   <div className="flex justify-between">
-                    <span className="text-slate-400">Monthly Burn:</span>
+                    <span className="text-slate-400">Recurring Burn:</span>
                     <span className="font-black text-slate-900 dark:text-white">
                       {currency.symbol}{v.monthlyCost.toLocaleString('en-US')}/mo
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-slate-400">Renewal Cadence:</span>
+                    <span className="text-slate-400">Cadence:</span>
                     <span className="font-semibold text-slate-700 dark:text-slate-300">
                       {v.renewalCadence}
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-slate-400">2025 YTD Total:</span>
+                    <span className="text-slate-400">Total Recorded:</span>
                     <span className="font-bold text-sky-600 dark:text-sky-400">
                       {currency.symbol}{v.totalYtd.toLocaleString('en-US')}
                     </span>
@@ -1049,20 +1103,26 @@ export const ExpensesView: React.FC = () => {
                     }}
                     className="text-[11px] font-bold text-sky-600 dark:text-sky-400 hover:underline"
                   >
-                    View Invoices →
+                    View Expenses →
                   </button>
                 </div>
               </div>
             ))}
           </div>
+          )}
         </div>
       )}
 
       {/* TAB 4: BUDGETS & COST CONTROL */}
       {activeTab === 'budgets' && (
         <div className="space-y-4">
+          {liveBudgets.length === 0 ? (
+            <div className={`p-10 rounded-2xl border text-center text-xs text-slate-500 ${cardBg}`}>
+              No expense budgets to display yet. Record expenses to see live category spend utilization.
+            </div>
+          ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {INITIAL_EXPENSE_BUDGETS.map((b) => {
+            {liveBudgets.map((b) => {
               const utilPercent = Math.round((b.actualSpend / b.monthlyBudget) * 100);
               const isOver = utilPercent > 90;
               const isWarning = utilPercent >= 80 && utilPercent <= 90;
@@ -1124,6 +1184,7 @@ export const ExpensesView: React.FC = () => {
               );
             })}
           </div>
+          )}
         </div>
       )}
 

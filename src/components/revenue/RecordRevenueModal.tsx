@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { X, DollarSign, CheckCircle2 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
+import { useAuth } from '../../context/AuthContext';
 import { useSystemCurrency } from '../../data/currencyService';
+import { getCurrentYear, getRealCrmClients, getTodayIso } from '../../data/financeUtils';
 import { RevenueTransaction, RevenueStreamType, RevenuePaymentStatus } from '../../types/crm';
 
 interface RecordRevenueModalProps {
@@ -21,42 +23,31 @@ const STREAM_OPTIONS: RevenueStreamType[] = [
 
 const PAYMENT_METHODS = ['Stripe', 'Wire Transfer', 'ACH', 'Credit Card', 'PayPal'] as const;
 
-const CLIENT_SUGGESTIONS = [
-  'FinEdge Systems',
-  'CloudNest AI',
-  'TechVision Inc.',
-  'SwiftRetail Global',
-  'Gulf Cloud Services',
-  'Solaria Logistics',
-  'DLF Limited',
-  'BioPulse Health',
-  'DataSoft Solutions',
-  'Healthcare Plus',
-  'Real Estate Pro',
-  'GreenLeaf Dining',
-];
-
 export const RecordRevenueModal: React.FC<RecordRevenueModalProps> = ({
   isOpen,
   onClose,
   onSave,
 }) => {
   const { theme } = useTheme();
+  const { currentUser } = useAuth();
   const isLight = theme === 'white-sky';
   const { currency } = useSystemCurrency();
+
+  const realClients = useMemo(() => (isOpen ? getRealCrmClients() : []), [isOpen]);
+  const yr = getCurrentYear();
 
   const [client, setClient] = useState('');
   const [project, setProject] = useState('');
   const [streamType, setStreamType] = useState<RevenueStreamType>('SaaS Subscription (MRR)');
   const [amount, setAmount] = useState('');
   const [status, setStatus] = useState<RevenuePaymentStatus>('Received');
-  const [paymentMethod, setPaymentMethod] = useState<'Stripe' | 'Wire Transfer' | 'ACH' | 'Credit Card' | 'PayPal'>('Stripe');
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [invoiceNumber, setInvoiceNumber] = useState(`INV-2025-${Math.floor(125 + Math.random() * 50)}`);
+  const [paymentMethod, setPaymentMethod] = useState<'Stripe' | 'Wire Transfer' | 'ACH' | 'Credit Card' | 'PayPal'>('Wire Transfer');
+  const [date, setDate] = useState(getTodayIso());
+  const [invoiceNumber, setInvoiceNumber] = useState(`INV-${yr}-${Math.floor(100 + Math.random() * 899)}`);
   const [isRecurring, setIsRecurring] = useState(false);
   const [recurringCadence, setRecurringCadence] = useState<'Monthly' | 'Quarterly' | 'Annual'>('Monthly');
   const [grossMarginPercent, setGrossMarginPercent] = useState('55');
-  const [accountManager, setAccountManager] = useState('Sayed (CEO)');
+  const [accountManager, setAccountManager] = useState(currentUser?.name || 'Sayed');
   const [notes, setNotes] = useState('');
   const [error, setError] = useState('');
 
@@ -70,7 +61,7 @@ export const RecordRevenueModal: React.FC<RecordRevenueModalProps> = ({
     }
     const numAmount = parseFloat(amount);
     if (isNaN(numAmount) || numAmount <= 0) {
-      setError('Please enter a valid positive dollar amount.');
+      setError(`Please enter a valid positive amount (${currency.symbol}).`);
       return;
     }
 
@@ -79,7 +70,7 @@ export const RecordRevenueModal: React.FC<RecordRevenueModalProps> = ({
 
     const newTx: RevenueTransaction = {
       id: `rev-${Date.now()}`,
-      transactionNumber: `REV-2025-${Math.floor(100 + Math.random() * 900)}`,
+      transactionNumber: `REV-${yr}-${Math.floor(100 + Math.random() * 899)}`,
       client: client.trim(),
       project: project.trim() || `${streamType} Engagement`,
       streamType,
@@ -93,7 +84,7 @@ export const RecordRevenueModal: React.FC<RecordRevenueModalProps> = ({
       recurringCadence: isRecurring ? recurringCadence : undefined,
       grossMarginPercent: margin,
       netProfit,
-      accountManager: accountManager.trim() || 'Sayed (CEO)',
+      accountManager: accountManager.trim() || currentUser?.name || 'Sayed',
       notes: notes.trim() || undefined,
       createdAt: new Date().toISOString(),
     };
@@ -159,17 +150,20 @@ export const RecordRevenueModal: React.FC<RecordRevenueModalProps> = ({
                   type="text"
                   required
                   list="client-suggestions"
-                  placeholder="e.g. FinEdge Systems"
+                  placeholder="Enter or pick a CRM client"
                   value={client}
                   onChange={(e) => {
-                    setClient(e.target.value);
+                    const val = e.target.value;
+                    setClient(val);
                     setError('');
+                    const found = realClients.find((rc) => rc.name.toLowerCase() === val.toLowerCase());
+                    if (found?.project && !project) setProject(found.project);
                   }}
                   className={inputClass}
                 />
                 <datalist id="client-suggestions">
-                  {CLIENT_SUGGESTIONS.map((c) => (
-                    <option key={c} value={c} />
+                  {realClients.map((c) => (
+                    <option key={c.name} value={c.name} />
                   ))}
                 </datalist>
               </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   X,
   CreditCard,
@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useSystemCurrency } from '../../data/currencyService';
+import { getCurrentYear, getRealCrmClients, getTodayIso } from '../../data/financeUtils';
 import {
   PaymentTransaction,
   PaymentType,
@@ -25,18 +26,6 @@ interface RecordPaymentModalProps {
   onSave: (payment: PaymentTransaction) => void;
   initialData?: PaymentTransaction | null;
 }
-
-const CLIENT_OPTIONS = [
-  { name: 'FinEdge Systems', email: 'procurement@finedgesystems.com', invoice: 'INV-2025-134' },
-  { name: 'TechVision Inc.', email: 'billing@techvision.com', invoice: 'INV-2025-132' },
-  { name: 'CloudNest AI', email: 'finance@cloudnest.ai', invoice: 'INV-2025-131' },
-  { name: 'SwiftRetail Global', email: 'accounts@swiftretail.com', invoice: 'INV-2025-130' },
-  { name: 'Gulf Cloud Services', email: 'treasury@gulfcloud.ae', invoice: 'INV-2025-129' },
-  { name: 'DLF Limited', email: 'facilities@dlf.in', invoice: 'INV-2025-128' },
-  { name: 'Healthcare Plus', email: 'billing@healthcareplus.org', invoice: 'INV-2025-127' },
-  { name: 'GreenLeaf Dining', email: 'contact@greenleafdining.com', invoice: 'INV-2025-126' },
-  { name: 'Mahindra Housing', email: 'procurement@mahindrahousing.in', invoice: 'INV-2025-125' },
-];
 
 const GATEWAYS: PaymentGatewayKey[] = [
   'Stripe',
@@ -65,16 +54,19 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
   const isLight = theme === 'white-sky';
   const sysCurrency = useSystemCurrency();
 
+  const realClients = useMemo(() => (isOpen ? getRealCrmClients() : []), [isOpen]);
+  const yr = getCurrentYear();
+
   const [client, setClient] = useState('');
   const [clientEmail, setClientEmail] = useState('');
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [paymentType, setPaymentType] = useState<PaymentType>('Inflow / Collection');
   const [amount, setAmount] = useState<number | ''>('');
-  const [currency, setCurrency] = useState<'USD' | 'EUR' | 'GBP' | 'AED' | 'INR'>((sysCurrency.code as any) || 'USD');
+  const [currency, setCurrency] = useState<'USD' | 'EUR' | 'GBP' | 'AED' | 'INR'>((sysCurrency.code as any) || 'INR');
   const [gateway, setGateway] = useState<PaymentGatewayKey>('Chase Commercial');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodType>('Wire / SWIFT');
   const [status, setStatus] = useState<PaymentStatus>('Succeeded');
-  const [date, setDate] = useState('2025-05-20');
+  const [date, setDate] = useState(getTodayIso());
   const [cardBrand, setCardBrand] = useState<'Visa' | 'Mastercard' | 'Amex'>('Visa');
   const [cardLast4, setCardLast4] = useState('4242');
   const [notes, setNotes] = useState('');
@@ -86,7 +78,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
     gateway === 'Stripe'
       ? Math.round((numAmount * 0.029 + 0.3) * 100) / 100
       : gateway === 'Chase Commercial'
-      ? 15.0
+      ? 0
       : gateway === 'Silicon Valley Bank'
       ? Math.min(5.0, Math.round(numAmount * 0.008 * 100) / 100)
       : gateway === 'PayPal Business'
@@ -102,25 +94,25 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
       setInvoiceNumber(initialData.invoiceNumber || '');
       setPaymentType(initialData.type || 'Inflow / Collection');
       setAmount(initialData.amount || '');
-      setCurrency(initialData.currency || 'USD');
+      setCurrency(initialData.currency || (sysCurrency.code as any) || 'INR');
       setGateway(initialData.gateway || 'Chase Commercial');
       setPaymentMethod(initialData.paymentMethod || 'Wire / SWIFT');
       setStatus(initialData.status || 'Succeeded');
-      setDate(initialData.date || '2025-05-20');
+      setDate(initialData.date || getTodayIso());
       setCardBrand(initialData.cardBrand || 'Visa');
       setCardLast4(initialData.cardLast4 || '4242');
       setNotes(initialData.notes || '');
     } else {
-      setClient(CLIENT_OPTIONS[0].name);
-      setClientEmail(CLIENT_OPTIONS[0].email);
-      setInvoiceNumber(CLIENT_OPTIONS[0].invoice);
+      setClient('');
+      setClientEmail('');
+      setInvoiceNumber('');
       setPaymentType('Inflow / Collection');
       setAmount('');
-      setCurrency((sysCurrency.code as any) || 'USD');
+      setCurrency((sysCurrency.code as any) || 'INR');
       setGateway('Chase Commercial');
       setPaymentMethod('Wire / SWIFT');
       setStatus('Succeeded');
-      setDate('2025-05-20');
+      setDate(getTodayIso());
       setCardBrand('Visa');
       setCardLast4('4242');
       setNotes('');
@@ -132,10 +124,9 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
 
   const handleClientSelect = (clientName: string) => {
     setClient(clientName);
-    const found = CLIENT_OPTIONS.find((c) => c.name === clientName);
-    if (found) {
+    const found = realClients.find((c) => c.name.toLowerCase() === clientName.toLowerCase());
+    if (found?.email) {
       setClientEmail(found.email);
-      setInvoiceNumber(found.invoice);
     }
   };
 
@@ -157,18 +148,18 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
       id: initialData?.id || `pay-${Date.now()}`,
       paymentNumber:
         initialData?.paymentNumber ||
-        `PAY-2025-${Math.floor(145 + Math.random() * 50)}`,
+        `PAY-${yr}-${Math.floor(100 + Math.random() * 899)}`,
       transactionReference:
         initialData?.transactionReference ||
         (gateway === 'Stripe'
           ? `ch_${Math.random().toString(36).substring(2, 12)}`
-          : `wire_${Math.random().toString(36).substring(2, 10)}`),
+          : `txn_${Math.random().toString(36).substring(2, 10)}`),
       type: paymentType,
       client: client.trim(),
       clientEmail: clientEmail.trim() || undefined,
       invoiceNumber: invoiceNumber.trim() || undefined,
       amount: valAmount,
-      amountFormatted: `$${valAmount.toLocaleString('en-US')}`,
+      amountFormatted: `${sysCurrency.symbol}${valAmount.toLocaleString('en-US')}`,
       feeAmount: estimatedFee,
       netAmount: paymentType === 'Outflow / Refund' ? -valAmount : netAmount,
       currency,
@@ -179,7 +170,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
       cardLast4: isCard ? cardLast4 : undefined,
       date,
       settledDate: status === 'Succeeded' ? date : undefined,
-      receiptNumber: `REC-2025-${Math.floor(885 + Math.random() * 50)}`,
+      receiptNumber: `REC-${yr}-${Math.floor(100 + Math.random() * 899)}`,
       notes: notes.trim() || undefined,
       createdAt: initialData?.createdAt || new Date().toISOString(),
     };
@@ -272,7 +263,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                   className={inputClass}
                 />
                 <datalist id="client-options">
-                  {CLIENT_OPTIONS.map((c) => (
+                  {realClients.map((c) => (
                     <option key={c.name} value={c.name} />
                   ))}
                 </datalist>
@@ -297,7 +288,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
               <label className={labelClass}>Linked Invoice #</label>
               <input
                 type="text"
-                placeholder="e.g. INV-2025-134"
+                placeholder={`e.g. INV-${yr}-101`}
                 value={invoiceNumber}
                 onChange={(e) => setInvoiceNumber(e.target.value)}
                 className={inputClass}

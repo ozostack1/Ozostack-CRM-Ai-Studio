@@ -33,12 +33,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
-import {
-  INITIAL_PAYMENTS,
-  INITIAL_PAYMENT_GATEWAYS,
-  INITIAL_BANK_PAYOUTS,
-  INITIAL_PAYMENT_DISPUTES,
-} from '../../data/mockData';
+import { INITIAL_PAYMENT_GATEWAYS } from '../../data/mockData';
 import {
   PaymentTransaction,
   PaymentGateway,
@@ -56,6 +51,11 @@ import { InitiatePayoutModal } from './InitiatePayoutModal';
 import { ConfigureGatewayModal } from './ConfigureGatewayModal';
 import { DisputeEvidenceModal } from './DisputeEvidenceModal';
 import { useSystemCurrency, formatMoney } from '../../data/currencyService';
+import {
+  FinanceTimePeriod,
+  isDateInFinancePeriod,
+  syncPaymentToRevenue,
+} from '../../data/financeUtils';
 
 const LOCAL_STORAGE_PAYMENTS = 'ozostack_payments';
 const LOCAL_STORAGE_GATEWAYS = 'ozostack_payment_gateways';
@@ -63,68 +63,54 @@ const LOCAL_STORAGE_PAYOUTS = 'ozostack_bank_payouts';
 const LOCAL_STORAGE_DISPUTES = 'ozostack_payment_disputes';
 
 type HorizontalTab = 'ledger' | 'gateways' | 'payouts' | 'disputes';
-type TimePeriod = 'This Month' | 'This Quarter' | 'YTD 2025' | 'All Time';
+type TimePeriod = FinanceTimePeriod;
 
 export const PaymentsView: React.FC = () => {
   const { theme, setActiveNav } = useTheme();
   const isLight = theme === 'white-sky';
   const currency = useSystemCurrency();
 
-  // Persistence for Payments
-  const [payments, setPayments] = useState<PaymentTransaction[]>(() => {
+  const loadArr = <T,>(key: string): T[] => {
     try {
-      const stored = localStorage.getItem(LOCAL_STORAGE_PAYMENTS);
+      const stored = localStorage.getItem(key);
       if (stored !== null) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed)) return parsed;
       }
-    } catch (e) {
-      console.error('Failed to parse stored payments', e);
-    }
-    return INITIAL_PAYMENTS;
-  });
+    } catch {}
+    return [];
+  };
 
-  // Persistence for Gateways
+  // Persistence for Payments (clean empty default — zero mock data)
+  const [payments, setPayments] = useState<PaymentTransaction[]>(() => loadArr(LOCAL_STORAGE_PAYMENTS));
+
+  useEffect(() => {
+    const onSync = () => setPayments(loadArr(LOCAL_STORAGE_PAYMENTS));
+    window.addEventListener('storage', onSync);
+    window.addEventListener('ozostack-crm-config-changed', onSync);
+    return () => {
+      window.removeEventListener('storage', onSync);
+      window.removeEventListener('ozostack-crm-config-changed', onSync);
+    };
+  }, []);
+
+  // Persistence for Gateways (clean 0-volume defaults)
   const [gateways, setGateways] = useState<PaymentGateway[]>(() => {
-    try {
-      const stored = localStorage.getItem(LOCAL_STORAGE_GATEWAYS);
-      if (stored !== null) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (e) {
-      console.error('Failed to parse stored gateways', e);
-    }
-    return INITIAL_PAYMENT_GATEWAYS;
+    const stored = loadArr<PaymentGateway>(LOCAL_STORAGE_GATEWAYS);
+    if (stored.length > 0) return stored;
+    return INITIAL_PAYMENT_GATEWAYS.map((g) => ({
+      ...g,
+      monthlyVolume: 0,
+      monthlyVolumeFormatted: `${currency.symbol}0`,
+      transactionCount: 0,
+    }));
   });
 
-  // Persistence for Payouts
-  const [payouts, setPayouts] = useState<BankPayout[]>(() => {
-    try {
-      const stored = localStorage.getItem(LOCAL_STORAGE_PAYOUTS);
-      if (stored !== null) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (e) {
-      console.error('Failed to parse stored payouts', e);
-    }
-    return INITIAL_BANK_PAYOUTS;
-  });
+  // Persistence for Payouts (zero mock data)
+  const [payouts, setPayouts] = useState<BankPayout[]>(() => loadArr(LOCAL_STORAGE_PAYOUTS));
 
-  // Persistence for Disputes
-  const [disputes, setDisputes] = useState<PaymentDispute[]>(() => {
-    try {
-      const stored = localStorage.getItem(LOCAL_STORAGE_DISPUTES);
-      if (stored !== null) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (e) {
-      console.error('Failed to parse stored disputes', e);
-    }
-    return INITIAL_PAYMENT_DISPUTES;
-  });
+  // Persistence for Disputes (zero mock data)
+  const [disputes, setDisputes] = useState<PaymentDispute[]>(() => loadArr(LOCAL_STORAGE_DISPUTES));
 
   const [activeTab, setActiveTab] = useState<HorizontalTab>('ledger');
   const [layoutMode, setLayoutMode] = useState<'table' | 'cards'>('table');
@@ -133,7 +119,7 @@ export const PaymentsView: React.FC = () => {
   const [selectedStatus, setSelectedStatus] = useState<string>('All');
   const [selectedGateway, setSelectedGateway] = useState<string>('All');
   const [selectedMethod, setSelectedMethod] = useState<string>('All');
-  const [selectedPeriod, setSelectedPeriod] = useState<TimePeriod>('This Month');
+  const [selectedPeriod, setSelectedPeriod] = useState<TimePeriod>('All Time');
 
   // Modals & Drawer State
   const [isRecordModalOpen, setIsRecordModalOpen] = useState(false);
@@ -190,7 +176,7 @@ export const PaymentsView: React.FC = () => {
     }
   }, [disputes]);
 
-  // Save (Create or Edit)
+  // Save (Create or Edit) — auto-syncs Succeeded Inflow payments to Revenue & P&L
   const handleSavePayment = (payment: PaymentTransaction) => {
     setPayments((prev) => {
       const exists = prev.some((it) => it.id === payment.id);
@@ -198,25 +184,31 @@ export const PaymentsView: React.FC = () => {
         ? prev.map((it) => (it.id === payment.id ? payment : it))
         : [payment, ...prev];
     });
+    if (payment.status === 'Succeeded' && payment.type === 'Inflow / Collection') {
+      syncPaymentToRevenue(payment, currency.symbol);
+    }
 
     if (selectedPayment && selectedPayment.id === payment.id) {
       setSelectedPayment(payment);
     }
-    showToast(`Payment ${payment.paymentNumber} saved successfully`);
+    showToast(`Payment ${payment.paymentNumber} saved & synced to Revenue!`);
   };
 
   // Status update
   const handleUpdateStatus = (id: string, newStatus: PaymentStatus) => {
     setPayments((prev) =>
-      prev.map((it) =>
-        it.id === id
-          ? {
-              ...it,
-              status: newStatus,
-              settledDate: newStatus === 'Succeeded' ? new Date().toISOString().split('T')[0] : it.settledDate,
-            }
-          : it
-      )
+      prev.map((it) => {
+        if (it.id !== id) return it;
+        const updated = {
+          ...it,
+          status: newStatus,
+          settledDate: newStatus === 'Succeeded' ? new Date().toISOString().split('T')[0] : it.settledDate,
+        };
+        if (newStatus === 'Succeeded' && updated.type === 'Inflow / Collection') {
+          syncPaymentToRevenue(updated, currency.symbol);
+        }
+        return updated;
+      })
     );
 
     if (selectedPayment && selectedPayment.id === id) {
@@ -279,16 +271,9 @@ export const PaymentsView: React.FC = () => {
     showToast(`Refund of ${currency.symbol}${refundAmount.toLocaleString()} processed successfully`);
   };
 
-  // Date period checker with support for current calendar and demo data
-  const isDateInPeriod = (dateStr: string, period: TimePeriod): boolean => {
-    if (period === 'All Time') return true;
-    const currentMonth = new Date().toISOString().slice(0, 7);
-    const currentYear = new Date().getFullYear().toString();
-    if (period === 'This Month') return dateStr.startsWith('2025-05') || dateStr.startsWith(currentMonth);
-    if (period === 'This Quarter') return (dateStr >= '2025-04-01' && dateStr <= '2025-06-30') || dateStr.startsWith(currentMonth);
-    if (period === 'YTD 2025') return dateStr.startsWith('2025') || dateStr.startsWith(currentYear);
-    return true;
-  };
+  // Date period checker (real current calendar)
+  const isDateInPeriod = (dateStr: string, period: TimePeriod): boolean =>
+    isDateInFinancePeriod(dateStr, period);
 
   // Check if any filters are active
   const hasActiveFilters =
@@ -681,7 +666,7 @@ export const PaymentsView: React.FC = () => {
 
         {/* Period Filter Pills */}
         <div className="flex items-center gap-1 shrink-0">
-          {(['This Month', 'This Quarter', 'YTD 2025', 'All Time'] as TimePeriod[]).map((period) => (
+          {(['This Month', 'This Quarter', 'YTD', 'All Time'] as TimePeriod[]).map((period) => (
             <button
               key={period}
               onClick={() => setSelectedPeriod(period)}

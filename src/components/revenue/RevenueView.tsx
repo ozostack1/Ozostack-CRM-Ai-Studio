@@ -22,10 +22,6 @@ import {
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import {
-  INITIAL_REVENUE_TRANSACTIONS,
-  INITIAL_REVENUE_CLIENTS,
-} from '../../data/mockData';
-import {
   RevenueTransaction,
   RevenueClientSummary,
   RevenuePaymentStatus,
@@ -34,38 +30,53 @@ import { RecordRevenueModal } from './RecordRevenueModal';
 import { RevenueDetailsDrawer } from './RevenueDetailsDrawer';
 import { useRevenueGoal, formatCurrency, formatCompact } from '../../data/revenueGoalService';
 import { EditGoalModal } from '../goals/EditGoalModal';
+import {
+  FinanceTimePeriod,
+  getCurrentYear,
+  isDateInFinancePeriod,
+} from '../../data/financeUtils';
 
 const LOCAL_STORAGE_KEY = 'ozostack_revenue_transactions';
 
 type TabViewMode = 'ledger' | 'analytics' | 'clients' | 'forecast';
-type TimePeriod = 'This Month' | 'This Quarter' | 'YTD 2025' | 'All Time';
+type TimePeriod = FinanceTimePeriod;
 
 export const RevenueView: React.FC = () => {
   const { theme, setActiveNav } = useTheme();
   const isLight = theme === 'white-sky';
 
-  // Persistence
-  const [transactions, setTransactions] = useState<RevenueTransaction[]>(() => {
+  const loadRevStorage = (): RevenueTransaction[] => {
     try {
       const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
       if (stored !== null) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed)) {
-          return parsed;
-        }
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {
       console.error('Failed to parse stored revenue transactions', e);
     }
-    return INITIAL_REVENUE_TRANSACTIONS;
-  });
+    return [];
+  };
+
+  // Persistence (zero mock data fallback)
+  const [transactions, setTransactions] = useState<RevenueTransaction[]>(loadRevStorage);
+
+  useEffect(() => {
+    const onSync = () => setTransactions(loadRevStorage());
+    window.addEventListener('storage', onSync);
+    window.addEventListener('ozostack-crm-config-changed', onSync);
+    return () => {
+      window.removeEventListener('storage', onSync);
+      window.removeEventListener('ozostack-crm-config-changed', onSync);
+    };
+  }, []);
 
   const [activeTab, setActiveTab] = useState<TabViewMode>('ledger');
   const [layoutMode, setLayoutMode] = useState<'table' | 'cards'>('table');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedStream, setSelectedStream] = useState<string>('All');
   const [selectedStatus, setSelectedStatus] = useState<string>('All');
-  const [selectedPeriod, setSelectedPeriod] = useState<TimePeriod>('This Month');
+  const [selectedPeriod, setSelectedPeriod] = useState<TimePeriod>('All Time');
 
   // Modal & Drawer State
   const [isRecordModalOpen, setIsRecordModalOpen] = useState(false);
@@ -113,14 +124,9 @@ export const RevenueView: React.FC = () => {
     setSelectedTransaction(null);
   };
 
-  // Period filter evaluator
-  const isDateInPeriod = (dateStr: string, period: TimePeriod): boolean => {
-    if (period === 'All Time') return true;
-    if (period === 'This Month') return dateStr.startsWith('2025-05');
-    if (period === 'This Quarter') return dateStr >= '2025-04-01' && dateStr <= '2025-06-30';
-    if (period === 'YTD 2025') return dateStr.startsWith('2025');
-    return true;
-  };
+  // Period filter evaluator (uses real current month / quarter / year)
+  const isDateInPeriod = (dateStr: string, period: TimePeriod): boolean =>
+    isDateInFinancePeriod(dateStr, period);
 
   // Filtered transactions for the ledger view
   const filteredTransactions = useMemo(() => {
@@ -164,14 +170,15 @@ export const RevenueView: React.FC = () => {
 
     // Blended Gross Margin
     const totalNetProfit = periodTxs.reduce((sum, tx) => sum + tx.netProfit, 0);
-    const blendedMargin = grossTotal > 0 ? ((totalNetProfit / grossTotal) * 100).toFixed(1) : '42.6';
+    const blendedMargin = grossTotal > 0 ? ((totalNetProfit / grossTotal) * 100).toFixed(1) : '0.0';
 
-    // Annual Goal (computed on YTD basis from dynamic goal service)
+    // Annual Goal (computed on current fiscal year YTD from dynamic goal service)
     const annualGoal = goalState.annualGoal;
+    const currentYearStr = String(getCurrentYear());
     const ytdReceived = transactions
-      .filter((tx) => tx.status === 'Received' && tx.date.startsWith('2025'))
+      .filter((tx) => tx.status === 'Received' && (tx.date || '').startsWith(currentYearStr))
       .reduce((sum, tx) => sum + tx.amount, 0);
-    const goalProgressPercent = ((ytdReceived / annualGoal) * 100).toFixed(2);
+    const goalProgressPercent = annualGoal > 0 ? ((ytdReceived / annualGoal) * 100).toFixed(2) : '0.00';
     const remainingToGoal = Math.max(0, annualGoal - ytdReceived);
 
     return {
@@ -186,7 +193,7 @@ export const RevenueView: React.FC = () => {
     };
   }, [transactions, selectedPeriod]);
 
-  // Client Lifetime Billings & MRR Matrix (dynamic & reactive)
+  // Client Lifetime Billings & MRR Matrix (100% real data from recorded revenue)
   const clientMatrix = useMemo<RevenueClientSummary[]>(() => {
     const clientMap = new Map<string, { total: number; mrr: number; contracts: number; lastDate: string }>();
 
@@ -204,38 +211,16 @@ export const RevenueView: React.FC = () => {
     });
 
     const result: RevenueClientSummary[] = [];
-    const seen = new Set<string>();
-
-    INITIAL_REVENUE_CLIENTS.forEach((initClient) => {
-      seen.add(initClient.client);
-      const live = clientMap.get(initClient.client);
-      if (live) {
-        result.push({
-          client: initClient.client,
-          totalRevenue: Math.max(initClient.totalRevenue, live.total),
-          totalRevenueFormatted: formatCurrency(Math.max(initClient.totalRevenue, live.total)),
-          mrrContribution: live.mrr > 0 ? live.mrr : initClient.mrrContribution,
-          activeContracts: Math.max(initClient.activeContracts, live.contracts),
-          health: initClient.health,
-          lastPaymentDate: live.lastDate || initClient.lastPaymentDate,
-        });
-      } else {
-        result.push(initClient);
-      }
-    });
-
     clientMap.forEach((data, clientName) => {
-      if (!seen.has(clientName)) {
-        result.push({
-          client: clientName,
-          totalRevenue: data.total,
-          totalRevenueFormatted: formatCurrency(data.total),
-          mrrContribution: data.mrr,
-          activeContracts: data.contracts,
-          health: 'High',
-          lastPaymentDate: data.lastDate,
-        });
-      }
+      result.push({
+        client: clientName,
+        totalRevenue: data.total,
+        totalRevenueFormatted: formatCurrency(data.total),
+        mrrContribution: data.mrr,
+        activeContracts: data.contracts,
+        health: 'High',
+        lastPaymentDate: data.lastDate,
+      });
     });
 
     return result.sort((a, b) => b.totalRevenue - a.totalRevenue);
@@ -557,7 +542,7 @@ export const RevenueView: React.FC = () => {
         {/* Period Selector */}
         <div className="flex items-center gap-2 self-end sm:self-auto">
           <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl text-xs">
-            {(['This Month', 'This Quarter', 'YTD 2025', 'All Time'] as TimePeriod[]).map((period) => (
+            {(['This Month', 'This Quarter', 'YTD', 'All Time'] as TimePeriod[]).map((period) => (
               <button
                 key={period}
                 onClick={() => setSelectedPeriod(period)}

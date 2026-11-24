@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   X,
   Plus,
@@ -6,6 +6,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
+import { useAuth } from '../../context/AuthContext';
 import {
   Invoice,
   ProposalDocument,
@@ -16,6 +17,7 @@ import {
 } from '../../types/crm';
 import { PreviewDocType } from './DocumentPreviewModal';
 import { useSystemCurrency } from '../../data/currencyService';
+import { getCurrentYear, getRealCrmClients, getTodayIso } from '../../data/financeUtils';
 
 interface InvoiceEditModalProps {
   isOpen: boolean;
@@ -25,21 +27,6 @@ interface InvoiceEditModalProps {
   onSave: (docType: PreviewDocType, data: any) => void;
 }
 
-const CLIENT_OPTIONS = [
-  'TechVision Inc.',
-  'DataSoft Solutions',
-  'FinEdge Systems',
-  'CloudNest AI',
-  'SwiftRetail Global',
-  'Gulf Cloud Services',
-  'Healthcare Plus',
-  'Solaria Logistics',
-  'DLF Limited',
-  'Mahindra Housing',
-  'Real Estate Pro',
-  'GreenLeaf Dining',
-];
-
 export const InvoiceEditModal: React.FC<InvoiceEditModalProps> = ({
   isOpen,
   onClose,
@@ -48,8 +35,11 @@ export const InvoiceEditModal: React.FC<InvoiceEditModalProps> = ({
   onSave,
 }) => {
   const { theme } = useTheme();
+  const { currentUser } = useAuth();
   const isLight = theme === 'white-sky';
   const currency = useSystemCurrency();
+  const realClients = useMemo(() => (isOpen ? getRealCrmClients() : []), [isOpen]);
+  const yr = getCurrentYear();
 
   // Common fields
   const [client, setClient] = useState('');
@@ -58,7 +48,7 @@ export const InvoiceEditModal: React.FC<InvoiceEditModalProps> = ({
   const [clientTaxId, setClientTaxId] = useState('');
   const [title, setTitle] = useState('');
   const [status, setStatus] = useState<string>('Pending');
-  const [issueDate, setIssueDate] = useState(new Date().toISOString().split('T')[0]);
+  const [issueDate, setIssueDate] = useState(getTodayIso());
   const [secondDate, setSecondDate] = useState(
     new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0]
   );
@@ -158,8 +148,10 @@ export const InvoiceEditModal: React.FC<InvoiceEditModalProps> = ({
         setScope(ctr.scopeSummary || '');
       }
     } else {
-      // Reset form
-      setClient(CLIENT_OPTIONS[0]);
+      // Reset form (blank client so user picks a real CRM client or types new one)
+      setClient('');
+      setClientEmail('');
+      setClientAddress('');
       setStatus(docType === 'contract' ? 'Active' : 'Pending');
       setIssueDate(new Date().toISOString().split('T')[0]);
       setSecondDate(new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0]);
@@ -277,12 +269,12 @@ export const InvoiceEditModal: React.FC<InvoiceEditModalProps> = ({
         id: initialData?.id || `inv-${Date.now()}`,
         invoiceNumber:
           (initialData as Invoice)?.invoiceNumber ||
-          `INV-2025-${Math.floor(130 + Math.random() * 50)}`,
+          `INV-${yr}-${Math.floor(100 + Math.random() * 899)}`,
         client,
         clientEmail: clientEmail || `${client.toLowerCase().replace(/[^a-z0-9]/g, '')}@client.com`,
         clientAddress: clientAddress || 'Corporate Office',
         clientTaxId,
-        amount: `$${calculatedTotal.toLocaleString('en-US')}`,
+        amount: `${currency.symbol}${calculatedTotal.toLocaleString('en-US')}`,
         amountNumeric: calculatedTotal,
         status: status as any,
         issueDate,
@@ -305,8 +297,8 @@ export const InvoiceEditModal: React.FC<InvoiceEditModalProps> = ({
         id: initialData?.id || `prop-${Date.now()}`,
         proposalNumber:
           (initialData as ProposalDocument)?.proposalNumber ||
-          `PROP-2025-0${Math.floor(45 + Math.random() * 20)}`,
-        title: title || `${client} AI & Cloud Enterprise Proposal`,
+          `PROP-${yr}-${Math.floor(100 + Math.random() * 899)}`,
+        title: title || `${client} Proposal`,
         client,
         clientEmail,
         clientAddress,
@@ -318,7 +310,7 @@ export const InvoiceEditModal: React.FC<InvoiceEditModalProps> = ({
         taxRate: activeTaxRate,
         taxAmount: propTax,
         value: propTotal,
-        valueFormatted: `$${propTotal.toLocaleString('en-US')}`,
+        valueFormatted: `${currency.symbol}${propTotal.toLocaleString('en-US')}`,
         issueDate,
         validUntil: secondDate,
         deliverables,
@@ -332,8 +324,8 @@ export const InvoiceEditModal: React.FC<InvoiceEditModalProps> = ({
         id: initialData?.id || `quo-${Date.now()}`,
         quotationNumber:
           (initialData as QuotationDocument)?.quotationNumber ||
-          `QUO-2025-0${Math.floor(85 + Math.random() * 20)}`,
-        title: title || `${client} Engineering Estimate`,
+          `QUO-${yr}-${Math.floor(100 + Math.random() * 899)}`,
+        title: title || `${client} Quotation`,
         client,
         clientEmail,
         clientAddress,
@@ -345,7 +337,7 @@ export const InvoiceEditModal: React.FC<InvoiceEditModalProps> = ({
         taxRate: activeTaxRate,
         taxAmount: calculatedTax,
         totalAmount: calculatedTotal,
-        totalFormatted: `$${calculatedTotal.toLocaleString('en-US')}`,
+        totalFormatted: `${currency.symbol}${calculatedTotal.toLocaleString('en-US')}`,
         issueDate,
         validUntil: secondDate,
         notes,
@@ -358,16 +350,16 @@ export const InvoiceEditModal: React.FC<InvoiceEditModalProps> = ({
         id: initialData?.id || `ctr-${Date.now()}`,
         contractNumber:
           (initialData as ContractDocument)?.contractNumber ||
-          `CTR-2025-0${Math.floor(20 + Math.random() * 20)}`,
-        title: title || `Master Services Agreement (MSA) - ${client}`,
+          `CTR-${yr}-${Math.floor(100 + Math.random() * 899)}`,
+        title: title || `Service Agreement - ${client}`,
         client,
-        clientSigner: clientSigner || `${client} Authorized Executive`,
-        companySigner: companySigner || 'Sayed (Chief Executive Officer)',
+        clientSigner: clientSigner || `${client} Authorized Signatory`,
+        companySigner: companySigner || `${currentUser?.name || 'Sayed'} (OzoStack)`,
         status: status as any,
         startDate: issueDate,
         endDate: secondDate,
         contractValue,
-        contractValueFormatted: `$${contractValue.toLocaleString('en-US')} Total`,
+        contractValueFormatted: `${currency.symbol}${contractValue.toLocaleString('en-US')} Total`,
         billingCadence,
         clauses,
         scopeSummary: scope || 'Enterprise services agreement and operational SLA.',
@@ -444,13 +436,19 @@ export const InvoiceEditModal: React.FC<InvoiceEditModalProps> = ({
                   type="text"
                   required
                   list="client-list"
+                  placeholder="Enter or pick a CRM client"
                   value={client}
-                  onChange={(e) => setClient(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setClient(val);
+                    const found = realClients.find((rc) => rc.name.toLowerCase() === val.toLowerCase());
+                    if (found?.email && !clientEmail) setClientEmail(found.email);
+                  }}
                   className={inputClass}
                 />
                 <datalist id="client-list">
-                  {CLIENT_OPTIONS.map((c) => (
-                    <option key={c} value={c} />
+                  {realClients.map((c) => (
+                    <option key={c.name} value={c.name} />
                   ))}
                 </datalist>
               </div>

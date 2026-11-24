@@ -12,8 +12,10 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
+import { useAuth } from '../../context/AuthContext';
 import { useSystemCurrency } from '../../data/currencyService';
 import { getActualSavedProjects } from '../../data/projectDirectory';
+import { getCurrentYear, getTodayIso } from '../../data/financeUtils';
 import {
   ExpenseItem,
   ExpenseCategory,
@@ -94,6 +96,7 @@ export const RecordExpenseModal: React.FC<RecordExpenseModalProps> = ({
   initialData,
 }) => {
   const { theme } = useTheme();
+  const { currentUser } = useAuth();
   const isLight = theme === 'white-sky';
   const currency = useSystemCurrency();
 
@@ -106,7 +109,7 @@ export const RecordExpenseModal: React.FC<RecordExpenseModalProps> = ({
   const [taxDeductible, setTaxDeductible] = useState(true);
   const [status, setStatus] = useState<ExpenseStatus>('Paid');
   const [paymentMethod, setPaymentMethod] = useState<ExpensePaymentMethod>('Corporate Card');
-  const [date, setDate] = useState('2025-05-20');
+  const [date, setDate] = useState(getTodayIso());
   const [dueDate, setDueDate] = useState('');
   const [project, setProject] = useState('');
   const [client, setClient] = useState('');
@@ -114,7 +117,7 @@ export const RecordExpenseModal: React.FC<RecordExpenseModalProps> = ({
   const [isRecurring, setIsRecurring] = useState(false);
   const [recurringInterval, setRecurringInterval] = useState<'Monthly' | 'Quarterly' | 'Annual'>('Monthly');
   const [receiptFilename, setReceiptFilename] = useState('');
-  const [submittedBy, setSubmittedBy] = useState('Sayed (CEO)');
+  const [submittedBy, setSubmittedBy] = useState(currentUser?.name || 'Sayed');
   const [notes, setNotes] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -129,7 +132,7 @@ export const RecordExpenseModal: React.FC<RecordExpenseModalProps> = ({
       setTaxDeductible(initialData.taxDeductible ?? true);
       setStatus(initialData.status || 'Paid');
       setPaymentMethod(initialData.paymentMethod || 'Corporate Card');
-      setDate(initialData.date || '2025-05-20');
+      setDate(initialData.date || getTodayIso());
       setDueDate(initialData.dueDate || '');
       setProject(initialData.project || '');
       setClient(initialData.client || '');
@@ -137,11 +140,11 @@ export const RecordExpenseModal: React.FC<RecordExpenseModalProps> = ({
       setIsRecurring(initialData.isRecurring || false);
       setRecurringInterval(initialData.recurringInterval || 'Monthly');
       setReceiptFilename(initialData.receiptFilename || '');
-      setSubmittedBy(initialData.submittedBy || 'Sayed (CEO)');
+      setSubmittedBy(initialData.submittedBy || currentUser?.name || 'Sayed');
       setNotes(initialData.notes || '');
     } else {
       setTitle('');
-      setVendor(COMMON_VENDORS[0]);
+      setVendor('');
       setCategory('Cloud & Infrastructure');
       setDepartment('Engineering & AI');
       setAmount('');
@@ -149,19 +152,19 @@ export const RecordExpenseModal: React.FC<RecordExpenseModalProps> = ({
       setTaxDeductible(true);
       setStatus('Paid');
       setPaymentMethod('Corporate Card');
-      setDate('2025-05-20');
+      setDate(getTodayIso());
       setDueDate('');
       setProject('');
       setClient('');
       setIsBillableToClient(false);
       setIsRecurring(false);
       setRecurringInterval('Monthly');
-      setReceiptFilename('receipt-voucher-may.pdf');
-      setSubmittedBy('Sayed (CEO)');
+      setReceiptFilename('');
+      setSubmittedBy(currentUser?.name || 'Sayed');
       setNotes('');
     }
     setErrorMsg('');
-  }, [initialData, isOpen]);
+  }, [initialData, isOpen, currentUser?.name]);
 
   if (!isOpen) return null;
 
@@ -199,13 +202,13 @@ export const RecordExpenseModal: React.FC<RecordExpenseModalProps> = ({
       id: initialData?.id || `exp-${Date.now()}`,
       expenseNumber:
         initialData?.expenseNumber ||
-        `EXP-2025-0${Math.floor(95 + Math.random() * 20)}`,
+        `EXP-${getCurrentYear()}-${Math.floor(100 + Math.random() * 899)}`,
       title: title.trim(),
       vendor: vendor.trim(),
       category,
       department,
       amount: numAmount,
-      amountFormatted: `$${numAmount.toLocaleString('en-US')}`,
+      amountFormatted: `${currency.symbol}${numAmount.toLocaleString('en-US')}`,
       taxAmount: numTax,
       taxDeductible,
       status,

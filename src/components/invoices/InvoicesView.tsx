@@ -17,13 +17,7 @@ import {
   Check,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
-import {
-  INITIAL_DETAILED_INVOICES,
-  INITIAL_PROPOSALS,
-  INITIAL_QUOTATIONS,
-  INITIAL_CONTRACTS,
-  DEFAULT_INVOICE_BRANDING,
-} from '../../data/mockData';
+import { DEFAULT_INVOICE_BRANDING } from '../../data/mockData';
 import {
   Invoice,
   ProposalDocument,
@@ -35,6 +29,7 @@ import { DocumentPreviewModal, PreviewDocType } from './DocumentPreviewModal';
 import { InvoiceEditModal } from './InvoiceEditModal';
 import { ChangeLogoModal } from './ChangeLogoModal';
 import { useSystemCurrency, formatMoney } from '../../data/currencyService';
+import { syncPaidInvoiceToFinance } from '../../data/financeUtils';
 
 const STORAGE_INVOICES_KEY = 'ozostack_invoices';
 const STORAGE_PROPOSALS_KEY = 'ozostack_proposals';
@@ -66,7 +61,7 @@ export const InvoicesView: React.FC = () => {
     return DEFAULT_INVOICE_BRANDING;
   });
 
-  // Invoices State
+  // Invoices State (clean empty default — zero mock data)
   const [invoices, setInvoices] = useState<Invoice[]>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_INVOICES_KEY);
@@ -77,7 +72,7 @@ export const InvoicesView: React.FC = () => {
     } catch (e) {
       console.error(e);
     }
-    return INITIAL_DETAILED_INVOICES;
+    return [];
   });
 
   // Proposals State
@@ -91,7 +86,7 @@ export const InvoicesView: React.FC = () => {
     } catch (e) {
       console.error(e);
     }
-    return INITIAL_PROPOSALS;
+    return [];
   });
 
   // Quotations State
@@ -105,7 +100,7 @@ export const InvoicesView: React.FC = () => {
     } catch (e) {
       console.error(e);
     }
-    return INITIAL_QUOTATIONS;
+    return [];
   });
 
   // Contracts State
@@ -119,7 +114,7 @@ export const InvoicesView: React.FC = () => {
     } catch (e) {
       console.error(e);
     }
-    return INITIAL_CONTRACTS;
+    return [];
   });
 
   // Modals state
@@ -157,6 +152,9 @@ export const InvoicesView: React.FC = () => {
         const exists = prev.some((it) => it.id === updatedData.id);
         return exists ? prev.map((it) => (it.id === updatedData.id ? updatedData : it)) : [updatedData, ...prev];
       });
+      if (updatedData.status === 'Paid') {
+        syncPaidInvoiceToFinance(updatedData, currency.symbol, currency.code);
+      }
     } else if (docType === 'proposal') {
       setProposals((prev) => {
         const exists = prev.some((it) => it.id === updatedData.id);
@@ -215,11 +213,18 @@ export const InvoicesView: React.FC = () => {
     window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
   };
 
-  // Quick Status Updater
+  // Quick Status Updater (auto-syncs Paid invoices into Payments, Revenue & P&L)
   const handleUpdateDocumentStatus = (id: string, newStatus: string) => {
     if (activeTab === 'invoices') {
       setInvoices((prev) =>
-        prev.map((it) => (it.id === id ? { ...it, status: newStatus as any } : it))
+        prev.map((it) => {
+          if (it.id !== id) return it;
+          const updated = { ...it, status: newStatus as any };
+          if (newStatus === 'Paid') {
+            syncPaidInvoiceToFinance(updated, currency.symbol, currency.code);
+          }
+          return updated;
+        })
       );
     } else if (activeTab === 'proposals') {
       setProposals((prev) =>

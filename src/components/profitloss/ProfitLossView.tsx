@@ -44,13 +44,7 @@ import {
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useSystemCurrency } from '../../data/currencyService';
-import {
-  INITIAL_PNL_LINE_ITEMS,
-  INITIAL_MONTHLY_FINANCIALS,
-  INITIAL_DEPARTMENT_PNL,
-  INITIAL_FINANCIAL_SCENARIOS,
-  INITIAL_PNL_ADJUSTMENTS,
-} from '../../data/mockData';
+import { buildLivePnLData, getCurrentYear, getTodayIso } from '../../data/financeUtils';
 import {
   PnLPeriod,
   PnLAccountingMethod,
@@ -73,61 +67,71 @@ export const ProfitLossView: React.FC = () => {
   const isLight = theme === 'white-sky';
   const { currency } = useSystemCurrency();
 
-  // Persistence State
-  const [lineItems, setLineItems] = useState<PnLLineItem[]>(() => {
-    try {
-      const stored = localStorage.getItem(`${LOCAL_STORAGE_KEY}_items`);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch (e) {
-      console.error('Failed to parse stored P&L line items', e);
-    }
-    return INITIAL_PNL_LINE_ITEMS;
-  });
+  const [financeSyncTick, setFinanceSyncTick] = useState(0);
 
-  const [monthlyData] = useState<MonthlyFinancialRecord[]>(INITIAL_MONTHLY_FINANCIALS);
-  const [departments] = useState<DepartmentProfitLoss[]>(INITIAL_DEPARTMENT_PNL);
+  // Listen to real-time updates from Revenue, Invoices, Payments, Expenses & Payroll
+  useEffect(() => {
+    const onSync = () => setFinanceSyncTick((t) => t + 1);
+    window.addEventListener('storage', onSync);
+    window.addEventListener('ozostack-crm-config-changed', onSync);
+    return () => {
+      window.removeEventListener('storage', onSync);
+      window.removeEventListener('ozostack-crm-config-changed', onSync);
+    };
+  }, []);
 
   const [scenarios, setScenarios] = useState<FinancialScenario[]>(() => {
     try {
       const stored = localStorage.getItem(`${LOCAL_STORAGE_KEY}_scenarios`);
-      if (stored) {
+      if (stored !== null) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {
       console.error('Failed to parse stored scenarios', e);
     }
-    return INITIAL_FINANCIAL_SCENARIOS;
+    return [];
   });
 
   const [adjustments, setAdjustments] = useState<PnLAdjustment[]>(() => {
     try {
       const stored = localStorage.getItem(`${LOCAL_STORAGE_KEY}_adjustments`);
-      if (stored) {
+      if (stored !== null) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {
       console.error('Failed to parse stored adjustments', e);
     }
-    return INITIAL_PNL_ADJUSTMENTS;
+    return [];
   });
 
   // Controls & Filters
+  const currentYr = getCurrentYear();
+  const todayStr = getTodayIso();
   const [activeTab, setActiveTab] = useState<HorizontalTab>('statement');
-  const [selectedYear, setSelectedYear] = useState<number>(2026);
-  const [selectedPeriod, setSelectedPeriod] = useState<PnLPeriod>('This Month');
+  const [selectedYear, setSelectedYear] = useState<number>(currentYr);
+  const [selectedPeriod, setSelectedPeriod] = useState<PnLPeriod>(`YTD ${currentYr}` as PnLPeriod);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
-  const [specificSingleDate, setSpecificSingleDate] = useState('2026-11-04');
-  const [customStartDate, setCustomStartDate] = useState('2026-01-01');
-  const [customEndDate, setCustomEndDate] = useState('2026-11-04');
+  const [specificSingleDate, setSpecificSingleDate] = useState(todayStr);
+  const [customStartDate, setCustomStartDate] = useState(`${currentYr}-01-01`);
+  const [customEndDate, setCustomEndDate] = useState(todayStr);
   const [statementViewMode, setStatementViewMode] = useState<'statement' | 'debitCredit'>('statement');
   const [hoveredMonth, setHoveredMonth] = useState<number | null>(null);
   const [accountingMethod, setAccountingMethod] = useState<PnLAccountingMethod>('Accrual');
   const [searchTerm, setSearchTerm] = useState('');
+
+  // 100% Live P&L computed strictly from real CRM Revenue, Paid Invoices, Payments, Expenses, Payroll & Adjustments
+  const livePnL = useMemo(
+    () => buildLivePnLData(selectedYear, adjustments),
+    [selectedYear, adjustments, financeSyncTick]
+  );
+  const lineItems: PnLLineItem[] = livePnL.lineItems;
+  const monthlyData: MonthlyFinancialRecord[] = livePnL.monthlyData;
+  const departments: DepartmentProfitLoss[] = livePnL.departments;
+  const setLineItems = (_updater: any) => {
+    setFinanceSyncTick((t) => t + 1);
+  };
 
   const calendarRef = useRef<HTMLDivElement>(null);
 
@@ -214,15 +218,16 @@ export const ProfitLossView: React.FC = () => {
 
   // Dynamic period financial aggregates computing exact Revenue, COGS, OpEx, Taxes, Net Income
   const periodAggregates = useMemo(() => {
-    // 1. Current Active Month (Nov 2026)
-    if (selectedPeriod === 'This Month' || selectedPeriod.includes('Nov 2026')) {
-      const nov = monthlyData[10] || monthlyData[monthlyData.length - 2];
+    const curMonthIdx = new Date().getMonth();
+    // 1. Current Active Month
+    if (selectedPeriod === 'This Month') {
+      const cur = monthlyData[curMonthIdx] || monthlyData[0];
       return {
-        revenue: nov.revenue,
-        cogs: nov.cogs,
-        opex: nov.opex,
-        netProfit: nov.netProfit,
-        taxes: nov.ebitda - nov.netProfit,
+        revenue: cur.revenue,
+        cogs: cur.cogs,
+        opex: cur.opex,
+        netProfit: cur.netProfit,
+        taxes: cur.ebitda - cur.netProfit,
       };
     }
 
@@ -386,16 +391,28 @@ export const ProfitLossView: React.FC = () => {
     };
   }, [selectedPeriod, monthlyData]);
 
-  // Baseline category totals from unscaled lineItems
-  const baseRevenue = 615000;
-  const baseCogs = 132500;
-  const baseOpex = 284260;
-  const baseTaxes = 43883;
+  // Baseline category totals from real unscaled lineItems (zero-safe, no hardcoded fake base!)
+  const baseRevenue = useMemo(
+    () => revenueItems.reduce((acc, it) => acc + it.actualAmount, 0),
+    [revenueItems]
+  );
+  const baseCogs = useMemo(
+    () => cogsItems.reduce((acc, it) => acc + it.actualAmount, 0),
+    [cogsItems]
+  );
+  const baseOpex = useMemo(
+    () => opexItems.reduce((acc, it) => acc + it.actualAmount, 0),
+    [opexItems]
+  );
+  const baseTaxes = useMemo(
+    () => taxItems.reduce((acc, it) => acc + it.actualAmount, 0),
+    [taxItems]
+  );
 
-  const revenueFactor = periodAggregates.revenue / baseRevenue;
-  const cogsFactor = periodAggregates.cogs / baseCogs;
-  const opexFactor = periodAggregates.opex / baseOpex;
-  const taxFactor = periodAggregates.taxes / baseTaxes;
+  const revenueFactor = baseRevenue > 0 ? periodAggregates.revenue / baseRevenue : 1;
+  const cogsFactor = baseCogs > 0 ? periodAggregates.cogs / baseCogs : 1;
+  const opexFactor = baseOpex > 0 ? periodAggregates.opex / baseOpex : 1;
+  const taxFactor = baseTaxes > 0 ? periodAggregates.taxes / baseTaxes : 1;
 
   // Default standard period presets for the active fiscal year (2026)
   const defaultPeriods = useMemo(
@@ -492,25 +509,11 @@ export const ProfitLossView: React.FC = () => {
       ? (((totalRevenue - totalBudgetRevenue) / totalBudgetRevenue) * 100).toFixed(1)
       : '0.0';
 
-  // Handle Adjustment Save
+  // Handle Adjustment Save (livePnL automatically recalculates from adjustments)
   const handleSaveAdjustment = (adj: PnLAdjustment) => {
     setAdjustments((prev) => [adj, ...prev]);
-
-    // Apply adjustment effect to corresponding line item if matching
-    setLineItems((prev) =>
-      prev.map((item) => {
-        if (adj.accountName.includes(item.accountCode)) {
-          const delta = adj.type === 'Credit' ? adj.amount : -adj.amount;
-          return {
-            ...item,
-            actualAmount: Math.max(0, item.actualAmount + delta),
-          };
-        }
-        return item;
-      })
-    );
-
-    showToast(`Journal adjustment ${adj.reference} successfully posted to ledger`);
+    setLineItems(null);
+    showToast(`Journal adjustment ${adj.reference} successfully posted to live P&L`);
   };
 
   // Handle Scenario Save & Delete
