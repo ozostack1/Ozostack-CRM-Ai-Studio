@@ -2516,17 +2516,18 @@ const server = http.createServer(async (req, res) => {
           rawLeads.push(item);
         };
 
-        // Step A: Geocode city to focused city-core bounding box via Nominatim
+        // Step A: Geocode city via Photon (fast, Cloud-Run friendly, never 403s like Nominatim)
         let bbox = null;
         try {
-          const geoUrl = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(city)}`;
-          const geoRes = await fetchWithTimeout(geoUrl, { headers: uaHeaders }, 7000);
-          const geoArr = await geoRes.json().catch(() => []);
-          if (Array.isArray(geoArr) && geoArr[0]) {
-            const lat = Number(geoArr[0].lat);
-            const lon = Number(geoArr[0].lon);
+          const geoUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(city)}&limit=1`;
+          const geoRes = await fetchWithTimeout(geoUrl, { headers: uaHeaders }, 6000);
+          const geoJson = await geoRes.json().catch(() => null);
+          const coords = geoJson?.features?.[0]?.geometry?.coordinates;
+          if (Array.isArray(coords) && coords.length >= 2) {
+            const lon = Number(coords[0]);
+            const lat = Number(coords[1]);
             if (!Number.isNaN(lat) && !Number.isNaN(lon)) {
-              const span = 0.14; // ~15km radius around city center (fast indexed Overpass lookup)
+              const span = 0.14; // ~15km radius around city center
               bbox = `${(lat - span).toFixed(4)},${(lon - span).toFixed(4)},${(lat + span).toFixed(4)},${(lon + span).toFixed(4)}`;
             }
           }
@@ -2534,7 +2535,7 @@ const server = http.createServer(async (req, res) => {
           /* ignore */
         }
 
-        // Step B: Fast Indexed Overpass Query (exact OSM tags first + mirror fallback)
+        // Step B: Fast Indexed Overpass Query (when Overpass mirrors are healthy)
         if (bbox) {
           const catLow = category.toLowerCase();
           const EXACT_TAG_MAP = [
@@ -2567,12 +2568,10 @@ const server = http.createServer(async (req, res) => {
               `node["name"]["shop"~"${safeToken}",i](${bbox});`,
               `node["name"]["office"~"${safeToken}",i](${bbox});`,
               `node["name"]["amenity"~"${safeToken}",i](${bbox});`,
-              `node["name"~"${safeToken}",i]["phone"](${bbox});`,
-              `node["name"~"${safeToken}",i]["website"](${bbox});`,
             ].join('\n');
           }
 
-          const overpassQuery = `[out:json][timeout:12];(\n${unionBody}\n);out tags ${limit * 8};`;
+          const overpassQuery = `[out:json][timeout:8];(\n${unionBody}\n);out tags ${limit * 6};`;
           const overpassMirrors = [
             'https://overpass-api.de/api/interpreter',
             'https://overpass.kumi.systems/api/interpreter',
@@ -2585,12 +2584,13 @@ const server = http.createServer(async (req, res) => {
                 {
                   method: 'POST',
                   headers: {
-                    ...uaHeaders,
+                    'User-Agent': uaHeaders['User-Agent'],
+                    Accept: '*/*',
                     'Content-Type': 'application/x-www-form-urlencoded',
                   },
                   body: `data=${encodeURIComponent(overpassQuery)}`,
                 },
-                12000
+                7000
               );
               const ovData = await ovRes.json().catch(() => null);
               if (ovRes.ok && Array.isArray(ovData?.elements) && ovData.elements.length > 0) {
@@ -2634,39 +2634,75 @@ const server = http.createServer(async (req, res) => {
                 if (rawLeads.length > 0) break;
               }
             } catch {
-              /* try next mirror */
+              /* try next mirror or fall through to Photon POI search */
             }
           }
         }
 
-        // Step C: Nominatim POI Search Fallback if Overpass returned fewer results
-        if (rawLeads.length < Math.min(6, limit)) {
+        // Step C: Ultra-Reliable Photon POI Search + Direct OSM v0.6 Tag Lookup (never 502s!)
+        if (rawLeads.length < limit) {
           try {
-            const nomUrl = `https://nominatim.openstreetmap.org/search?format=jsonv2&extratags=1&addressdetails=1&limit=${limit}&q=${encodeURIComponent(
+            const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(
               `${category} ${city}`
-            )}`;
-            const nomRes = await fetchWithTimeout(nomUrl, { headers: uaHeaders }, 8000);
-            const nomArr = await nomRes.json().catch(() => []);
-            if (Array.isArray(nomArr)) {
-              for (const item of nomArr) {
-                if (rawLeads.length >= limit) break;
-                const t = item.extratags || {};
-                const title = String(item.name || '').trim();
-                if (!title || title.toLowerCase() === city.toLowerCase()) continue;
-                pushOsmItem({
-                  id: `ag-nom-${item.place_id}`,
-                  name: title,
-                  category: String(item.type || category).replace(/_/g, ' '),
-                  address: String(item.display_name || city).slice(0, 140),
-                  city,
-                  phone: String(t.phone || t['contact:phone'] || t['contact:mobile'] || '').trim(),
-                  email: String(t.email || t['contact:email'] || '').trim(),
-                  website: String(t.website || t['contact:website'] || t.url || '').trim(),
+            )}&limit=${Math.min(25, limit * 2)}`;
+            const pRes = await fetchWithTimeout(photonUrl, { headers: uaHeaders }, 7000);
+            const pJson = await pRes.json().catch(() => null);
+            const features = Array.isArray(pJson?.features) ? pJson.features : [];
+
+            const candidates = features
+              .filter((f) => f?.properties?.name)
+              .slice(0, limit - rawLeads.length + 4);
+
+            const enrichedPhoton = await Promise.all(
+              candidates.map(async (f) => {
+                const props = f.properties || {};
+                let tags = {};
+                const osmTypeMap = { N: 'node', W: 'way', R: 'relation' };
+                const osmType = osmTypeMap[props.osm_type];
+                if (osmType && props.osm_id) {
+                  try {
+                    const tagRes = await fetchWithTimeout(
+                      `https://api.openstreetmap.org/api/0.6/${osmType}/${props.osm_id}.json`,
+                      { headers: uaHeaders },
+                      3500
+                    );
+                    const tagJson = await tagRes.json().catch(() => null);
+                    if (tagJson?.elements?.[0]?.tags) {
+                      tags = tagJson.elements[0].tags;
+                    }
+                  } catch {
+                    /* ignore */
+                  }
+                }
+                const addrParts = [
+                  props.housenumber || tags['addr:housenumber'],
+                  props.street || tags['addr:street'],
+                  props.district || props.locality || tags['addr:suburb'],
+                  props.city || tags['addr:city'] || city,
+                  props.postcode || tags['addr:postcode'],
+                ].filter(Boolean);
+
+                return {
+                  id: `ag-ph-${props.osm_type || 'x'}-${props.osm_id || Math.random().toString(36).slice(2, 8)}`,
+                  name: String(tags.name || props.name || '').trim(),
+                  category: String(
+                    props.osm_value || tags.amenity || tags.shop || tags.office || category
+                  ).replace(/_/g, ' '),
+                  address: addrParts.length > 0 ? addrParts.join(', ') : city,
+                  city: String(props.city || tags['addr:city'] || city),
+                  phone: String(tags.phone || tags['contact:phone'] || tags['contact:mobile'] || '').trim(),
+                  email: String(tags.email || tags['contact:email'] || '').trim(),
+                  website: String(tags.website || tags['contact:website'] || tags.url || '').trim(),
                   rating: null,
                   reviewsCount: null,
                   sourceEngine,
-                });
-              }
+                };
+              })
+            );
+
+            for (const item of enrichedPhoton) {
+              if (rawLeads.length >= limit) break;
+              pushOsmItem(item);
             }
           } catch {
             /* ignore */
