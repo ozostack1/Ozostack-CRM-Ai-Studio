@@ -2402,6 +2402,8 @@ const server = http.createServer(async (req, res) => {
       const city = String(body.city || '').trim();
       const limit = Math.min(30, Math.max(5, Number(body.limit) || 10));
       const startPage = Math.max(1, Math.min(10, Number(body.startPage) || 1));
+      const maxReviews = Number(body.maxReviews) > 0 ? Number(body.maxReviews) : 0;
+      const maxRating = Number(body.maxRating) > 0 && Number(body.maxRating) <= 5 ? Number(body.maxRating) : 0;
       const excludeKeysArr = Array.isArray(body.excludeKeys) ? body.excludeKeys : [];
       const excludeSet = new Set(
         excludeKeysArr.map((k) => String(k || '').trim().toLowerCase()).filter(Boolean)
@@ -2416,6 +2418,17 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { ok: false, error: 'Business category and city are both required.' });
         return;
       }
+
+      const passesQualityFilter = (rating, reviewsCount) => {
+        if (maxReviews > 0) {
+          const rev = typeof reviewsCount === 'number' ? reviewsCount : 0;
+          if (rev > maxReviews) return false;
+        }
+        if (maxRating > 0) {
+          if (typeof rating === 'number' && rating > maxRating) return false;
+        }
+        return true;
+      };
 
       const fetchWithTimeout = async (url, options = {}, timeoutMs = 6000) => {
         const ctrl = new AbortController();
@@ -2450,7 +2463,8 @@ const server = http.createServer(async (req, res) => {
 
       // 1A. Google Maps via Serper.dev API (Multi-Page Loop to Guarantee Exact Requested Count)
       if (serperApiKey) {
-        const maxPagesToScan = 4;
+        const hasFilter = maxReviews > 0 || maxRating > 0;
+        const maxPagesToScan = hasFilter ? 6 : 4;
         let currentPage = startPage;
         for (let step = 0; step < maxPagesToScan && rawLeads.length < limit; step++) {
           try {
@@ -2479,6 +2493,9 @@ const server = http.createServer(async (req, res) => {
             sourceEngine = 'Google Maps (Live)';
             for (const p of places) {
               if (rawLeads.length >= limit) break;
+              const ratingVal = typeof p.rating === 'number' ? p.rating : null;
+              const reviewsVal = typeof p.ratingCount === 'number' ? p.ratingCount : null;
+              if (!passesQualityFilter(ratingVal, reviewsVal)) continue;
               const title = String(p.title || '').trim();
               const cid = String(p.cid || '').trim();
               if (isAlreadyExcluded(title, cid)) continue;
@@ -2501,8 +2518,8 @@ const server = http.createServer(async (req, res) => {
                 googleMapsUrl: mapsUrl,
                 latitude: typeof p.latitude === 'number' ? p.latitude : null,
                 longitude: typeof p.longitude === 'number' ? p.longitude : null,
-                rating: typeof p.rating === 'number' ? p.rating : null,
-                reviewsCount: typeof p.ratingCount === 'number' ? p.ratingCount : null,
+                rating: ratingVal,
+                reviewsCount: reviewsVal,
                 sourceEngine,
               });
             }
@@ -2540,6 +2557,9 @@ const server = http.createServer(async (req, res) => {
             sourceEngine = 'Google Places API';
             for (const p of gData.places) {
               if (rawLeads.length >= limit) break;
+              const ratingVal = typeof p.rating === 'number' ? p.rating : null;
+              const reviewsVal = typeof p.userRatingCount === 'number' ? p.userRatingCount : null;
+              if (!passesQualityFilter(ratingVal, reviewsVal)) continue;
               const title = String(p.displayName?.text || '').trim();
               const pid = String(p.id || '').trim();
               if (isAlreadyExcluded(title, pid)) continue;
@@ -2559,8 +2579,8 @@ const server = http.createServer(async (req, res) => {
                   `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
                     `${title} ${city}`
                   )}`,
-                rating: typeof p.rating === 'number' ? p.rating : null,
-                reviewsCount: typeof p.userRatingCount === 'number' ? p.userRatingCount : null,
+                rating: ratingVal,
+                reviewsCount: reviewsVal,
                 sourceEngine,
               });
             }

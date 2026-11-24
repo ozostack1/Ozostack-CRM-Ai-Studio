@@ -125,6 +125,9 @@ export const AiAgentsView: React.FC = () => {
   const [category, setCategory] = useState('Dental Clinic');
   const [city, setCity] = useState('Mumbai');
   const [limit, setLimit] = useState<number>(10);
+  const [maxReviewsFilter, setMaxReviewsFilter] = useState<string>('0'); // '0' = Any, '20','50','100','200','500','custom'
+  const [customMaxReviews, setCustomMaxReviews] = useState<string>('50');
+  const [maxRatingFilter, setMaxRatingFilter] = useState<string>('0'); // '0' = Any, '4.5','4.0','3.5','3.0'
   const [enrichWebsites, setEnrichWebsites] = useState(true);
   const [isSearching, setIsSearching] = useState(false);
 
@@ -137,7 +140,9 @@ export const AiAgentsView: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [leads, setLeads] = useState<DiscoveredLead[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [filterMode, setFilterMode] = useState<'all' | 'verified' | 'email' | 'phone' | 'new'>('all');
+  const [filterMode, setFilterMode] = useState<
+    'all' | 'verified' | 'email' | 'phone' | 'new' | 'low-reviews-50' | 'low-reviews-100' | 'low-rating'
+  >('all');
   const [activeCategoryFilter, setActiveCategoryFilter] = useState<string>('ALL');
 
   // Push-to-CRM Category & Stage Controls
@@ -253,6 +258,9 @@ export const AiAgentsView: React.FC = () => {
       if (filterMode === 'email') return Boolean(l.email);
       if (filterMode === 'phone') return l.phoneVerified;
       if (filterMode === 'new') return !isDuplicateInCrm(l);
+      if (filterMode === 'low-reviews-50') return (l.reviewsCount ?? 0) <= 50;
+      if (filterMode === 'low-reviews-100') return (l.reviewsCount ?? 0) <= 100;
+      if (filterMode === 'low-rating') return l.rating !== null && l.rating <= 4.0;
       return true;
     });
   }, [leads, filterMode, activeCategoryFilter, existingDuplicateSets]);
@@ -266,7 +274,13 @@ export const AiAgentsView: React.FC = () => {
     return { total, mxVerified, withPhone, aiScored, duplicates };
   }, [filteredLeads, existingDuplicateSets]);
 
-  const currentQueryKey = `${category.trim().toLowerCase()}|${city.trim().toLowerCase()}`;
+  const resolvedMaxReviews =
+    maxReviewsFilter === 'custom'
+      ? Math.max(0, Number(customMaxReviews) || 0)
+      : Math.max(0, Number(maxReviewsFilter) || 0);
+  const resolvedMaxRating = Math.max(0, Number(maxRatingFilter) || 0);
+
+  const currentQueryKey = `${category.trim().toLowerCase()}|${city.trim().toLowerCase()}|r${resolvedMaxReviews}|s${resolvedMaxRating}`;
   const currentNextPage = pageCursorByQuery[currentQueryKey] || 1;
   const canLoadMoreCurrent = hasMoreByQuery[currentQueryKey] === true;
 
@@ -297,6 +311,8 @@ export const AiAgentsView: React.FC = () => {
           city: cityClean,
           limit,
           startPage,
+          maxReviews: resolvedMaxReviews > 0 ? resolvedMaxReviews : undefined,
+          maxRating: resolvedMaxRating > 0 ? resolvedMaxRating : undefined,
           excludeKeys,
           enrichWebsites,
           serperApiKey: agentCfg.serperApiKey.trim() || undefined,
@@ -823,6 +839,78 @@ export const AiAgentsView: React.FC = () => {
           </div>
         </div>
 
+        {/* Low Reviews & Low Star Rating Search Filters */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 text-xs pt-2 border-t border-slate-100 dark:border-slate-800">
+          <div className="lg:col-span-4">
+            <label className="font-bold text-slate-700 dark:text-slate-200 block mb-1">
+              Reviews Count Filter (Target Low-Review Businesses)
+            </label>
+            <select
+              value={maxReviewsFilter}
+              onChange={(e) => setMaxReviewsFilter(e.target.value)}
+              className={inputCls}
+            >
+              <option value="0">Any Review Count</option>
+              <option value="20">Under 20 Reviews (≤ 20)</option>
+              <option value="50">Under 50 Reviews (≤ 50)</option>
+              <option value="100">Under 100 Reviews (≤ 100)</option>
+              <option value="200">Under 200 Reviews (≤ 200)</option>
+              <option value="500">Under 500 Reviews (≤ 500)</option>
+              <option value="custom">Custom Max Reviews...</option>
+            </select>
+          </div>
+
+          {maxReviewsFilter === 'custom' && (
+            <div className="lg:col-span-2">
+              <label className="font-bold text-slate-700 dark:text-slate-200 block mb-1">
+                Max Reviews
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={10000}
+                value={customMaxReviews}
+                onChange={(e) => setCustomMaxReviews(e.target.value)}
+                placeholder="e.g. 75"
+                className={inputCls}
+              />
+            </div>
+          )}
+
+          <div className={maxReviewsFilter === 'custom' ? 'lg:col-span-3' : 'lg:col-span-4'}>
+            <label className="font-bold text-slate-700 dark:text-slate-200 block mb-1">
+              Star Rating Filter (Target Low-Rated Businesses)
+            </label>
+            <select
+              value={maxRatingFilter}
+              onChange={(e) => setMaxRatingFilter(e.target.value)}
+              className={inputCls}
+            >
+              <option value="0">Any Star Rating</option>
+              <option value="4.5">4.5 ★ &amp; Below</option>
+              <option value="4.0">4.0 ★ &amp; Below (Low Rated)</option>
+              <option value="3.5">3.5 ★ &amp; Below</option>
+              <option value="3.0">3.0 ★ &amp; Below</option>
+            </select>
+          </div>
+
+          <div
+            className={`${
+              maxReviewsFilter === 'custom' ? 'lg:col-span-3' : 'lg:col-span-4'
+            } flex items-end`}
+          >
+            <label className="flex items-center gap-2 text-[11px] font-semibold text-slate-600 dark:text-slate-300 cursor-pointer select-none pb-2">
+              <input
+                type="checkbox"
+                checked={enrichWebsites}
+                onChange={(e) => setEnrichWebsites(e.target.checked)}
+                className="rounded accent-sky-500"
+              />
+              <span>Extract Email, Phone, WhatsApp &amp; Socials + DNS MX</span>
+            </label>
+          </div>
+        </div>
+
         <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-[11px] font-bold text-slate-400 mr-1">Quick Niches:</span>
@@ -841,16 +929,6 @@ export const AiAgentsView: React.FC = () => {
               </button>
             ))}
           </div>
-
-          <label className="flex items-center gap-2 text-[11px] font-semibold text-slate-600 dark:text-slate-300 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={enrichWebsites}
-              onChange={(e) => setEnrichWebsites(e.target.checked)}
-              className="rounded accent-sky-500"
-            />
-            <span>Extract Full Email, Phone, WhatsApp &amp; Socials from Websites + DNS MX</span>
-          </label>
         </div>
       </form>
 
@@ -1078,6 +1156,9 @@ export const AiAgentsView: React.FC = () => {
                   ['verified', 'Verified Only'],
                   ['phone', 'Has Phone'],
                   ['email', 'Has Email'],
+                  ['low-reviews-50', '≤ 50 Reviews'],
+                  ['low-reviews-100', '≤ 100 Reviews'],
+                  ['low-rating', '≤ 4.0 ★'],
                   ['new', 'Not in CRM Yet'],
                 ] as const
               ).map(([id, label]) => (
