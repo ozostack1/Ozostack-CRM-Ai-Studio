@@ -89,6 +89,17 @@ export const FollowUpsView: React.FC = () => {
   // Follow-ups state
   const [followUps, setFollowUps] = useState<FollowUp[]>(loadFollowUpsFromStorage);
 
+  // Stay live-synced whenever follow-ups are added from Leads page, Workflows, or DB sync
+  useEffect(() => {
+    const onSync = () => setFollowUps(loadFollowUpsFromStorage());
+    window.addEventListener('storage', onSync);
+    window.addEventListener('ozostack-crm-config-changed', onSync);
+    return () => {
+      window.removeEventListener('storage', onSync);
+      window.removeEventListener('ozostack-crm-config-changed', onSync);
+    };
+  }, []);
+
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_FOLLOWUPS_KEY, JSON.stringify(followUps));
@@ -274,7 +285,8 @@ export const FollowUpsView: React.FC = () => {
     setFollowUps((prev) =>
       prev.map((f) => {
         if (!selectedFollowUpIds.includes(f.id)) return f;
-        const current = new Date((f.scheduledDate || '2025-05-20') + 'T00:00:00');
+        const todayIso = new Date().toISOString().split('T')[0];
+        const current = new Date((f.scheduledDate || todayIso) + 'T00:00:00');
         current.setDate(current.getDate() + daysToAdd);
         const newDateStr = current.toISOString().split('T')[0];
         const monthNames = [

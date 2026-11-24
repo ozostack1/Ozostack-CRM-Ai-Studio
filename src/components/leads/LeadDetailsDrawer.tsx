@@ -6,6 +6,7 @@ import {
   MessageSquare,
   Building,
   Calendar,
+  CalendarCheck2,
   DollarSign,
   Tag,
   Clock,
@@ -33,6 +34,7 @@ interface LeadDetailsDrawerProps {
   onOwnerChange: (leadId: string, newOwner: string) => void;
   onContactClick: (lead: Lead, action: ContactActionType, stageTrigger?: LeadStatus) => void;
   onOpenAiFollowup: (lead: Lead) => void;
+  onScheduleFollowUp?: (lead: Lead) => void;
   activities: LeadActivity[];
   onAddActivity: (leadId: string, description: string) => void;
 }
@@ -59,6 +61,7 @@ export const LeadDetailsDrawer: React.FC<LeadDetailsDrawerProps> = ({
   onOwnerChange,
   onContactClick,
   onOpenAiFollowup,
+  onScheduleFollowUp,
   activities,
   onAddActivity,
 }) => {
@@ -190,6 +193,18 @@ export const LeadDetailsDrawer: React.FC<LeadDetailsDrawerProps> = ({
               Direct Actions:
             </span>
             <div className="flex flex-wrap items-center gap-2">
+              {/* Schedule Follow-Up Button */}
+              {onScheduleFollowUp && (
+                <button
+                  onClick={() => onScheduleFollowUp(lead)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-600 text-white shadow-xs transition-all active:scale-95"
+                  title="Schedule a Follow-Up with Date & Time"
+                >
+                  <CalendarCheck2 className="w-3.5 h-3.5" />
+                  <span>Schedule Follow-Up</span>
+                </button>
+              )}
+
               {/* AI Follow-up generator */}
               <button
                 onClick={() => onOpenAiFollowup(lead)}

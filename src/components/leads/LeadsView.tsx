@@ -31,9 +31,10 @@ import {
   MoreVertical,
   ArrowUpDown,
   CheckCircle2,
+  CalendarCheck2,
   X,
 } from 'lucide-react';
-import { Lead, LeadStatus, LeadPriority, LeadSource, LeadActivity } from '../../types/crm';
+import { Lead, LeadStatus, LeadPriority, LeadSource, LeadActivity, FollowUp } from '../../types/crm';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useCrmConfig } from '../../data/crmConfig';
@@ -46,6 +47,7 @@ import { LeadActionModal, ContactActionType } from './LeadActionModal';
 import { LeadDetailsDrawer } from './LeadDetailsDrawer';
 import { AiFollowupModal } from './AiFollowupModal';
 import { BulkLeadUploadModal } from './BulkLeadUploadModal';
+import { FollowUpModal } from '../followups/FollowUpModal';
 
 const KANBAN_STAGES: LeadStatus[] = [
   'New Lead',
@@ -188,6 +190,50 @@ export const LeadsView: React.FC = () => {
   // AI Follow-up Draft Modal
   const [aiFollowupLead, setAiFollowupLead] = useState<Lead | null>(null);
   const [isAiFollowupOpen, setIsAiFollowupOpen] = useState(false);
+
+  // Direct Schedule Follow-Up Modal (pushes lead directly into Follow Ups with date & time)
+  const [scheduleFollowUpLead, setScheduleFollowUpLead] = useState<Lead | null>(null);
+  const [isScheduleFollowUpOpen, setIsScheduleFollowUpOpen] = useState(false);
+
+  const handleOpenScheduleFollowUp = (lead: Lead) => {
+    setScheduleFollowUpLead(lead);
+    setIsScheduleFollowUpOpen(true);
+  };
+
+  const handleSaveLeadFollowUp = (followUp: FollowUp) => {
+    try {
+      const raw = localStorage.getItem('ozostack_followups_v2');
+      const parsed = raw ? JSON.parse(raw) : [];
+      const list = Array.isArray(parsed) ? parsed : [];
+      localStorage.setItem('ozostack_followups_v2', JSON.stringify([followUp, ...list]));
+      window.dispatchEvent(new Event('storage'));
+      window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
+    } catch {
+      /* ignore */
+    }
+
+    if (scheduleFollowUpLead) {
+      handleAddActivity(
+        scheduleFollowUpLead.id,
+        `Scheduled ${followUp.type} follow-up for ${followUp.nextFollowUp}`
+      );
+    }
+
+    addNotification({
+      title: `Follow-Up Scheduled: ${followUp.contact}`,
+      subtitle: `${followUp.type} · ${followUp.nextFollowUp} · Owner: ${followUp.owner}`,
+      type: 'followup',
+      read: false,
+      targetNav: 'Follow Ups',
+      targetId: followUp.id,
+      priority: followUp.priority === 'High' ? 'high' : 'medium',
+      timeAgo: 'Just now',
+    });
+
+    showToast(`Follow-Up scheduled for ${followUp.contact} on ${followUp.nextFollowUp}!`);
+    setIsScheduleFollowUpOpen(false);
+    setScheduleFollowUpLead(null);
+  };
 
   // Drag and Drop State for Kanban
   const [draggedLeadId, setDraggedLeadId] = useState<string | null>(null);
@@ -1150,6 +1196,15 @@ export const LeadsView: React.FC = () => {
                             <Sparkles className="w-4 h-4" />
                           </button>
 
+                          {/* Direct Schedule Follow-Up Button */}
+                          <button
+                            onClick={() => handleOpenScheduleFollowUp(lead)}
+                            className="p-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500 text-amber-600 hover:text-white transition-all active:scale-95"
+                            title={`Schedule Follow-Up for ${lead.name} (Date & Time)`}
+                          >
+                            <CalendarCheck2 className="w-4 h-4" />
+                          </button>
+
                           {/* WhatsApp Button */}
                           <button
                             onClick={() => handleOpenContact(lead, 'whatsapp')}
@@ -1503,6 +1558,15 @@ export const LeadsView: React.FC = () => {
                                 <Sparkles className="w-3.5 h-3.5" />
                               </button>
 
+                              {/* Schedule Follow-Up Button */}
+                              <button
+                                onClick={() => handleOpenScheduleFollowUp(lead)}
+                                className="p-1 rounded bg-amber-500/10 hover:bg-amber-500 text-amber-600 hover:text-white transition-colors"
+                                title="Schedule Follow-Up (Date & Time)"
+                              >
+                                <CalendarCheck2 className="w-3.5 h-3.5" />
+                              </button>
+
                               {/* WhatsApp */}
                               <button
                                 onClick={() => handleOpenContact(lead, 'whatsapp')}
@@ -1585,6 +1649,7 @@ export const LeadsView: React.FC = () => {
         onOwnerChange={handleOwnerChange}
         onContactClick={handleOpenContact}
         onOpenAiFollowup={handleOpenAiFollowup}
+        onScheduleFollowUp={handleOpenScheduleFollowUp}
         activities={activities}
         onAddActivity={handleAddActivity}
       />
@@ -1624,30 +1689,52 @@ export const LeadsView: React.FC = () => {
         onLogActivity={handleAddActivity}
       />
 
-      {/* Stage Changed WhatsApp Follow-Up Toast Prompt */}
+      {/* Direct Schedule Follow-Up Modal (pushes Lead straight into Follow Ups with Date & Time) */}
+      <FollowUpModal
+        isOpen={isScheduleFollowUpOpen}
+        onClose={() => {
+          setIsScheduleFollowUpOpen(false);
+          setScheduleFollowUpLead(null);
+        }}
+        onSave={handleSaveLeadFollowUp}
+        followUpToEdit={null}
+        prefillLead={scheduleFollowUpLead}
+      />
+
+      {/* Stage Changed Follow-Up & WhatsApp Toast Prompt */}
       {statusChangePrompt && (
-        <div className="fixed bottom-6 right-6 z-[65] flex items-center gap-3 px-4 py-3 rounded-2xl bg-slate-900 text-white dark:bg-slate-850 dark:text-slate-100 shadow-2xl border border-emerald-500/40 animate-fade-in max-w-md">
+        <div className="fixed bottom-6 right-6 z-[65] flex items-center gap-3 px-4 py-3 rounded-2xl bg-slate-900 text-white dark:bg-slate-850 dark:text-slate-100 shadow-2xl border border-emerald-500/40 animate-fade-in max-w-lg">
           <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400 shrink-0">
-            <MessageSquare className="w-5 h-5" />
+            <CalendarCheck2 className="w-5 h-5" />
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-xs font-bold leading-tight truncate">
-              {statusChangePrompt.lead.name} moved to "{statusChangePrompt.stage}"
+              {statusChangePrompt.lead.name} moved to &ldquo;{statusChangePrompt.stage}&rdquo;
             </div>
             <div className="text-[11px] text-slate-400 truncate mt-0.5">
-              Send stage-specific WhatsApp follow-up?
+              Schedule a follow-up time or send WhatsApp?
             </div>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             <button
               onClick={() => {
+                handleOpenScheduleFollowUp(statusChangePrompt.lead);
+                setStatusChangePrompt(null);
+              }}
+              className="px-2.5 py-1.5 text-xs font-bold text-white bg-amber-500 hover:bg-amber-600 rounded-lg shadow-sm flex items-center gap-1 transition-all active:scale-95"
+            >
+              <CalendarCheck2 className="w-3.5 h-3.5" />
+              <span>Schedule</span>
+            </button>
+            <button
+              onClick={() => {
                 handleOpenContact(statusChangePrompt.lead, 'whatsapp', statusChangePrompt.stage);
                 setStatusChangePrompt(null);
               }}
-              className="px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg shadow-sm flex items-center gap-1 transition-all active:scale-95"
+              className="px-2.5 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg shadow-sm flex items-center gap-1 transition-all active:scale-95"
             >
               <MessageSquare className="w-3.5 h-3.5" />
-              <span>Send WhatsApp</span>
+              <span>WhatsApp</span>
             </button>
             <button
               onClick={() => setStatusChangePrompt(null)}
