@@ -2508,114 +2508,134 @@ const server = http.createServer(async (req, res) => {
 
         const pushOsmItem = (item) => {
           const nm = String(item.name || '').trim();
-          if (!nm) return;
+          if (!nm || nm.length < 2) return;
           const key = nm.toLowerCase();
+          if (key === category.toLowerCase() || key === city.toLowerCase()) return;
           if (seenNames.has(key)) return;
           seenNames.add(key);
           rawLeads.push(item);
         };
 
-        // Step A: Geocode city to bounding box via Nominatim
+        // Step A: Geocode city to focused city-core bounding box via Nominatim
         let bbox = null;
         try {
           const geoUrl = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(city)}`;
           const geoRes = await fetchWithTimeout(geoUrl, { headers: uaHeaders }, 7000);
           const geoArr = await geoRes.json().catch(() => []);
-          if (Array.isArray(geoArr) && geoArr[0]?.boundingbox) {
-            const [s, n, w, e] = geoArr[0].boundingbox.map(Number);
-            if (![s, n, w, e].some(Number.isNaN)) {
-              // Clamp bounding box radius to keep Overpass queries fast
-              const midLat = (s + n) / 2;
-              const midLon = (w + e) / 2;
-              const latSpan = Math.min(0.35, Math.max(0.08, (n - s) / 2));
-              const lonSpan = Math.min(0.35, Math.max(0.08, (e - w) / 2));
-              bbox = `${(midLat - latSpan).toFixed(4)},${(midLon - lonSpan).toFixed(4)},${(midLat + latSpan).toFixed(4)},${(midLon + lonSpan).toFixed(4)}`;
+          if (Array.isArray(geoArr) && geoArr[0]) {
+            const lat = Number(geoArr[0].lat);
+            const lon = Number(geoArr[0].lon);
+            if (!Number.isNaN(lat) && !Number.isNaN(lon)) {
+              const span = 0.14; // ~15km radius around city center (fast indexed Overpass lookup)
+              bbox = `${(lat - span).toFixed(4)},${(lon - span).toFixed(4)},${(lat + span).toFixed(4)},${(lon + span).toFixed(4)}`;
             }
           }
         } catch {
           /* ignore */
         }
 
-        // Step B: Query Overpass API with smart keyword regex inside city bbox
+        // Step B: Fast Indexed Overpass Query (exact OSM tags first + mirror fallback)
         if (bbox) {
-          try {
-            const tokens = category
-              .toLowerCase()
-              .replace(/[^a-z0-9\s]/g, ' ')
-              .split(/\s+/)
-              .filter((t) => t.length >= 3 && !['the', 'and', 'for', 'near', 'best', 'top'].includes(t));
-            const regexTerm = tokens.length > 0 ? tokens.slice(0, 3).join('|') : category.replace(/[^a-zA-Z0-9]/g, '');
-            const safeRegex = regexTerm.replace(/["\\]/g, '');
+          const catLow = category.toLowerCase();
+          const EXACT_TAG_MAP = [
+            { match: /dentist|dental/, clauses: [`nwr["amenity"="dentist"](${bbox});`, `nwr["healthcare"="dentist"](${bbox});`] },
+            { match: /clinic|doctor|medical/, clauses: [`nwr["amenity"="clinic"](${bbox});`, `nwr["amenity"="doctors"](${bbox});`] },
+            { match: /hospital/, clauses: [`nwr["amenity"="hospital"](${bbox});`] },
+            { match: /hotel|resort|lodge|inn/, clauses: [`nwr["tourism"="hotel"](${bbox});`, `nwr["tourism"="guest_house"](${bbox});`] },
+            { match: /restaurant|food|dining/, clauses: [`nwr["amenity"="restaurant"](${bbox});`] },
+            { match: /cafe|coffee|bakery/, clauses: [`nwr["amenity"="cafe"](${bbox});`, `nwr["shop"="bakery"](${bbox});`] },
+            { match: /gym|fitness|yoga/, clauses: [`nwr["leisure"="fitness_centre"](${bbox});`, `nwr["leisure"="sports_centre"](${bbox});`] },
+            { match: /real\s*estate|property|broker/, clauses: [`nwr["office"="estate_agent"](${bbox});`] },
+            { match: /school|college|academy|institute/, clauses: [`nwr["amenity"="school"](${bbox});`, `nwr["amenity"="college"](${bbox});`] },
+            { match: /salon|beauty|spa|parlour/, clauses: [`nwr["shop"="beauty"](${bbox});`, `nwr["shop"="hairdresser"](${bbox});`] },
+            { match: /pharmacy|chemist/, clauses: [`nwr["amenity"="pharmacy"](${bbox});`] },
+            { match: /lawyer|legal|advocate/, clauses: [`nwr["office"="lawyer"](${bbox});`] },
+            { match: /marketing|agency|software|it\b|tech|digital|company/, clauses: [`nwr["office"="company"](${bbox});`, `nwr["office"="it"](${bbox});`, `nwr["office"="advertising_agency"](${bbox});`] },
+            { match: /interior|architect|furniture/, clauses: [`nwr["office"="architect"](${bbox});`, `nwr["shop"="interior_decoration"](${bbox});`, `nwr["shop"="furniture"](${bbox});`] },
+            { match: /jewel/, clauses: [`nwr["shop"="jewelry"](${bbox});`] },
+            { match: /car|auto|garage|motor/, clauses: [`nwr["shop"="car_repair"](${bbox});`, `nwr["shop"="car"](${bbox});`] },
+          ];
 
-            const overpassQuery = `[out:json][timeout:10];(
-              nwr["name"]["amenity"~"${safeRegex}",i](${bbox});
-              nwr["name"]["shop"~"${safeRegex}",i](${bbox});
-              nwr["name"]["office"~"${safeRegex}",i](${bbox});
-              nwr["name"]["healthcare"~"${safeRegex}",i](${bbox});
-              nwr["name"]["tourism"~"${safeRegex}",i](${bbox});
-              nwr["name"]["craft"~"${safeRegex}",i](${bbox});
-              nwr["name"~"${safeRegex}",i]["phone"](${bbox});
-              nwr["name"~"${safeRegex}",i]["website"](${bbox});
-              nwr["name"~"${safeRegex}",i]["amenity"](${bbox});
-              nwr["name"~"${safeRegex}",i]["shop"](${bbox});
-              nwr["name"~"${safeRegex}",i]["office"](${bbox});
-            );out center tags ${limit * 3};`;
+          const matchedRule = EXACT_TAG_MAP.find((r) => r.match.test(catLow));
+          let unionBody = '';
+          if (matchedRule) {
+            unionBody = matchedRule.clauses.join('\n');
+          } else {
+            const firstToken = catLow.replace(/[^a-z0-9\s]/g, ' ').trim().split(/\s+/).find((t) => t.length >= 3) || catLow.replace(/[^a-z0-9]/g, '');
+            const safeToken = firstToken.replace(/["\\]/g, '');
+            unionBody = [
+              `node["name"]["shop"~"${safeToken}",i](${bbox});`,
+              `node["name"]["office"~"${safeToken}",i](${bbox});`,
+              `node["name"]["amenity"~"${safeToken}",i](${bbox});`,
+              `node["name"~"${safeToken}",i]["phone"](${bbox});`,
+              `node["name"~"${safeToken}",i]["website"](${bbox});`,
+            ].join('\n');
+          }
 
-            const ovRes = await fetchWithTimeout(
-              'https://overpass-api.de/api/interpreter',
-              {
-                method: 'POST',
-                headers: {
-                  ...uaHeaders,
-                  'Content-Type': 'application/x-www-form-urlencoded',
+          const overpassQuery = `[out:json][timeout:12];(\n${unionBody}\n);out tags ${limit * 8};`;
+          const overpassMirrors = [
+            'https://overpass-api.de/api/interpreter',
+            'https://overpass.kumi.systems/api/interpreter',
+          ];
+
+          for (const mirrorUrl of overpassMirrors) {
+            try {
+              const ovRes = await fetchWithTimeout(
+                mirrorUrl,
+                {
+                  method: 'POST',
+                  headers: {
+                    ...uaHeaders,
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                  },
+                  body: `data=${encodeURIComponent(overpassQuery)}`,
                 },
-                body: `data=${encodeURIComponent(overpassQuery)}`,
-              },
-              11000
-            );
-            const ovData = await ovRes.json().catch(() => null);
-            if (ovRes.ok && Array.isArray(ovData?.elements)) {
-              // Prefer listings that have phone, email, or website
-              const scored = ovData.elements
-                .filter((el) => el?.tags?.name)
-                .sort((a, b) => {
-                  const scoreEl = (t) =>
-                    (t.phone || t['contact:phone'] || t['contact:mobile'] ? 3 : 0) +
-                    (t.email || t['contact:email'] ? 3 : 0) +
-                    (t.website || t['contact:website'] ? 2 : 0);
-                  return scoreEl(b.tags) - scoreEl(a.tags);
-                });
+                12000
+              );
+              const ovData = await ovRes.json().catch(() => null);
+              if (ovRes.ok && Array.isArray(ovData?.elements) && ovData.elements.length > 0) {
+                const scored = ovData.elements
+                  .filter((el) => el?.tags?.name)
+                  .sort((a, b) => {
+                    const scoreEl = (t) =>
+                      (t.phone || t['contact:phone'] || t['contact:mobile'] ? 4 : 0) +
+                      (t.email || t['contact:email'] ? 4 : 0) +
+                      (t.website || t['contact:website'] || t.url ? 3 : 0);
+                    return scoreEl(b.tags) - scoreEl(a.tags);
+                  });
 
-              for (const el of scored) {
-                if (rawLeads.length >= limit) break;
-                const t = el.tags || {};
-                const addrParts = [
-                  t['addr:housenumber'],
-                  t['addr:street'],
-                  t['addr:suburb'] || t['addr:neighbourhood'],
-                  t['addr:city'] || city,
-                  t['addr:postcode'],
-                ].filter(Boolean);
+                for (const el of scored) {
+                  if (rawLeads.length >= limit) break;
+                  const t = el.tags || {};
+                  const addrParts = [
+                    t['addr:housenumber'],
+                    t['addr:street'],
+                    t['addr:suburb'] || t['addr:neighbourhood'],
+                    t['addr:city'] || city,
+                    t['addr:postcode'],
+                  ].filter(Boolean);
 
-                pushOsmItem({
-                  id: `ag-osm-${el.type}-${el.id}`,
-                  name: String(t.name).trim(),
-                  category: String(
-                    t.healthcare || t.office || t.shop || t.amenity || t.tourism || t.craft || category
-                  ).replace(/_/g, ' '),
-                  address: addrParts.length > 0 ? addrParts.join(', ') : city,
-                  city: String(t['addr:city'] || city),
-                  phone: String(t.phone || t['contact:phone'] || t['contact:mobile'] || '').trim(),
-                  email: String(t.email || t['contact:email'] || '').trim(),
-                  website: String(t.website || t['contact:website'] || t.url || '').trim(),
-                  rating: null,
-                  reviewsCount: null,
-                  sourceEngine,
-                });
+                  pushOsmItem({
+                    id: `ag-osm-${el.type}-${el.id}`,
+                    name: String(t.name).trim(),
+                    category: String(
+                      t.healthcare || t.office || t.shop || t.amenity || t.tourism || t.leisure || category
+                    ).replace(/_/g, ' '),
+                    address: addrParts.length > 0 ? addrParts.join(', ') : city,
+                    city: String(t['addr:city'] || city),
+                    phone: String(t.phone || t['contact:phone'] || t['contact:mobile'] || '').trim(),
+                    email: String(t.email || t['contact:email'] || '').trim(),
+                    website: String(t.website || t['contact:website'] || t.url || '').trim(),
+                    rating: null,
+                    reviewsCount: null,
+                    sourceEngine,
+                  });
+                }
+                if (rawLeads.length > 0) break;
               }
+            } catch {
+              /* try next mirror */
             }
-          } catch {
-            /* fallback to Nominatim below */
           }
         }
 
