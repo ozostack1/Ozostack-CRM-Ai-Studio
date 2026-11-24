@@ -2,6 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import dns from 'node:dns/promises';
 import { fileURLToPath } from 'node:url';
 import { MongoClient } from 'mongodb';
 import nodemailer from 'nodemailer';
@@ -2379,6 +2380,568 @@ const server = http.createServer(async (req, res) => {
           }
         } catch (err) {
           lastErr = err?.message || 'Network error calling Gemini API.';
+        }
+      }
+
+      sendJson(res, 200, { ok: false, error: lastErr });
+      return;
+    }
+
+    // ========================================================================
+    // AI Agents: Public Business Lead Discovery, Contact Extraction & Verification
+    // 100% Free Default (OpenStreetMap + Public Website Contact Extractor + DNS MX)
+    // Optional Google Maps via user's Serper.dev / Google Places API key
+    // ========================================================================
+    if (pathname === '/api/agents/lead-search' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const category = String(body.category || '').trim();
+      const city = String(body.city || '').trim();
+      const limit = Math.min(20, Math.max(5, Number(body.limit) || 12));
+      const enrichWebsites = body.enrichWebsites !== false;
+      const serperApiKey = String(body.serperApiKey || '').trim();
+      const googlePlacesApiKey = String(body.googlePlacesApiKey || '').trim();
+
+      if (!category || !city) {
+        sendJson(res, 400, { ok: false, error: 'Business category and city are both required.' });
+        return;
+      }
+
+      const fetchWithTimeout = async (url, options = {}, timeoutMs = 6000) => {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+        try {
+          return await fetch(url, { ...options, signal: ctrl.signal });
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+
+      let rawLeads = [];
+      let sourceEngine = 'OpenStreetMap (100% Free)';
+
+      // 1A. Optional Serper.dev Google Maps Places API
+      if (serperApiKey) {
+        try {
+          const sRes = await fetchWithTimeout(
+            'https://google.serper.dev/places',
+            {
+              method: 'POST',
+              headers: {
+                'X-API-KEY': serperApiKey,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ q: `${category} in ${city}`, gl: 'in', num: limit }),
+            },
+            10000
+          );
+          const sData = await sRes.json().catch(() => null);
+          if (sRes.ok && Array.isArray(sData?.places) && sData.places.length > 0) {
+            sourceEngine = 'Google Maps (Serper API)';
+            rawLeads = sData.places.slice(0, limit).map((p, idx) => ({
+              id: `ag-serp-${Date.now()}-${idx}`,
+              name: String(p.title || '').trim(),
+              category: String(p.category || category).trim(),
+              address: String(p.address || city).trim(),
+              city,
+              phone: String(p.phoneNumber || '').trim(),
+              email: '',
+              website: String(p.website || '').trim(),
+              rating: typeof p.rating === 'number' ? p.rating : null,
+              reviewsCount: typeof p.ratingCount === 'number' ? p.ratingCount : null,
+              sourceEngine,
+            }));
+          }
+        } catch {
+          /* fall back to free engine */
+        }
+      }
+
+      // 1B. Optional Official Google Places API (New v1)
+      if (rawLeads.length === 0 && googlePlacesApiKey) {
+        try {
+          const gRes = await fetchWithTimeout(
+            'https://places.googleapis.com/v1/places:searchText',
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Goog-Api-Key': googlePlacesApiKey,
+                'X-Goog-FieldMask':
+                  'places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.internationalPhoneNumber,places.websiteUri,places.rating,places.userRatingCount,places.primaryTypeDisplayName',
+              },
+              body: JSON.stringify({
+                textQuery: `${category} in ${city}`,
+                maxResultCount: limit,
+              }),
+            },
+            10000
+          );
+          const gData = await gRes.json().catch(() => null);
+          if (gRes.ok && Array.isArray(gData?.places) && gData.places.length > 0) {
+            sourceEngine = 'Google Places API';
+            rawLeads = gData.places.slice(0, limit).map((p, idx) => ({
+              id: `ag-gpl-${Date.now()}-${idx}`,
+              name: String(p.displayName?.text || '').trim(),
+              category: String(p.primaryTypeDisplayName?.text || category).trim(),
+              address: String(p.formattedAddress || city).trim(),
+              city,
+              phone: String(p.internationalPhoneNumber || p.nationalPhoneNumber || '').trim(),
+              email: '',
+              website: String(p.websiteUri || '').trim(),
+              rating: typeof p.rating === 'number' ? p.rating : null,
+              reviewsCount: typeof p.userRatingCount === 'number' ? p.userRatingCount : null,
+              sourceEngine,
+            }));
+          }
+        } catch {
+          /* fall back to free engine */
+        }
+      }
+
+      // 1C. Default 100% Free Engine: OpenStreetMap Nominatim + Overpass Public Directory
+      if (rawLeads.length === 0) {
+        const uaHeaders = {
+          'User-Agent': 'OzoStackCRM-LeadFinder/1.0 (https://ozostack.in)',
+          Accept: 'application/json',
+        };
+        const seenNames = new Set();
+
+        const pushOsmItem = (item) => {
+          const nm = String(item.name || '').trim();
+          if (!nm) return;
+          const key = nm.toLowerCase();
+          if (seenNames.has(key)) return;
+          seenNames.add(key);
+          rawLeads.push(item);
+        };
+
+        // Step A: Geocode city to bounding box via Nominatim
+        let bbox = null;
+        try {
+          const geoUrl = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(city)}`;
+          const geoRes = await fetchWithTimeout(geoUrl, { headers: uaHeaders }, 7000);
+          const geoArr = await geoRes.json().catch(() => []);
+          if (Array.isArray(geoArr) && geoArr[0]?.boundingbox) {
+            const [s, n, w, e] = geoArr[0].boundingbox.map(Number);
+            if (![s, n, w, e].some(Number.isNaN)) {
+              // Clamp bounding box radius to keep Overpass queries fast
+              const midLat = (s + n) / 2;
+              const midLon = (w + e) / 2;
+              const latSpan = Math.min(0.35, Math.max(0.08, (n - s) / 2));
+              const lonSpan = Math.min(0.35, Math.max(0.08, (e - w) / 2));
+              bbox = `${(midLat - latSpan).toFixed(4)},${(midLon - lonSpan).toFixed(4)},${(midLat + latSpan).toFixed(4)},${(midLon + lonSpan).toFixed(4)}`;
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+
+        // Step B: Query Overpass API with smart keyword regex inside city bbox
+        if (bbox) {
+          try {
+            const tokens = category
+              .toLowerCase()
+              .replace(/[^a-z0-9\s]/g, ' ')
+              .split(/\s+/)
+              .filter((t) => t.length >= 3 && !['the', 'and', 'for', 'near', 'best', 'top'].includes(t));
+            const regexTerm = tokens.length > 0 ? tokens.slice(0, 3).join('|') : category.replace(/[^a-zA-Z0-9]/g, '');
+            const safeRegex = regexTerm.replace(/["\\]/g, '');
+
+            const overpassQuery = `[out:json][timeout:10];(
+              nwr["name"]["amenity"~"${safeRegex}",i](${bbox});
+              nwr["name"]["shop"~"${safeRegex}",i](${bbox});
+              nwr["name"]["office"~"${safeRegex}",i](${bbox});
+              nwr["name"]["healthcare"~"${safeRegex}",i](${bbox});
+              nwr["name"]["tourism"~"${safeRegex}",i](${bbox});
+              nwr["name"]["craft"~"${safeRegex}",i](${bbox});
+              nwr["name"~"${safeRegex}",i]["phone"](${bbox});
+              nwr["name"~"${safeRegex}",i]["website"](${bbox});
+              nwr["name"~"${safeRegex}",i]["amenity"](${bbox});
+              nwr["name"~"${safeRegex}",i]["shop"](${bbox});
+              nwr["name"~"${safeRegex}",i]["office"](${bbox});
+            );out center tags ${limit * 3};`;
+
+            const ovRes = await fetchWithTimeout(
+              'https://overpass-api.de/api/interpreter',
+              {
+                method: 'POST',
+                headers: {
+                  ...uaHeaders,
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `data=${encodeURIComponent(overpassQuery)}`,
+              },
+              11000
+            );
+            const ovData = await ovRes.json().catch(() => null);
+            if (ovRes.ok && Array.isArray(ovData?.elements)) {
+              // Prefer listings that have phone, email, or website
+              const scored = ovData.elements
+                .filter((el) => el?.tags?.name)
+                .sort((a, b) => {
+                  const scoreEl = (t) =>
+                    (t.phone || t['contact:phone'] || t['contact:mobile'] ? 3 : 0) +
+                    (t.email || t['contact:email'] ? 3 : 0) +
+                    (t.website || t['contact:website'] ? 2 : 0);
+                  return scoreEl(b.tags) - scoreEl(a.tags);
+                });
+
+              for (const el of scored) {
+                if (rawLeads.length >= limit) break;
+                const t = el.tags || {};
+                const addrParts = [
+                  t['addr:housenumber'],
+                  t['addr:street'],
+                  t['addr:suburb'] || t['addr:neighbourhood'],
+                  t['addr:city'] || city,
+                  t['addr:postcode'],
+                ].filter(Boolean);
+
+                pushOsmItem({
+                  id: `ag-osm-${el.type}-${el.id}`,
+                  name: String(t.name).trim(),
+                  category: String(
+                    t.healthcare || t.office || t.shop || t.amenity || t.tourism || t.craft || category
+                  ).replace(/_/g, ' '),
+                  address: addrParts.length > 0 ? addrParts.join(', ') : city,
+                  city: String(t['addr:city'] || city),
+                  phone: String(t.phone || t['contact:phone'] || t['contact:mobile'] || '').trim(),
+                  email: String(t.email || t['contact:email'] || '').trim(),
+                  website: String(t.website || t['contact:website'] || t.url || '').trim(),
+                  rating: null,
+                  reviewsCount: null,
+                  sourceEngine,
+                });
+              }
+            }
+          } catch {
+            /* fallback to Nominatim below */
+          }
+        }
+
+        // Step C: Nominatim POI Search Fallback if Overpass returned fewer results
+        if (rawLeads.length < Math.min(6, limit)) {
+          try {
+            const nomUrl = `https://nominatim.openstreetmap.org/search?format=jsonv2&extratags=1&addressdetails=1&limit=${limit}&q=${encodeURIComponent(
+              `${category} ${city}`
+            )}`;
+            const nomRes = await fetchWithTimeout(nomUrl, { headers: uaHeaders }, 8000);
+            const nomArr = await nomRes.json().catch(() => []);
+            if (Array.isArray(nomArr)) {
+              for (const item of nomArr) {
+                if (rawLeads.length >= limit) break;
+                const t = item.extratags || {};
+                const title = String(item.name || '').trim();
+                if (!title || title.toLowerCase() === city.toLowerCase()) continue;
+                pushOsmItem({
+                  id: `ag-nom-${item.place_id}`,
+                  name: title,
+                  category: String(item.type || category).replace(/_/g, ' '),
+                  address: String(item.display_name || city).slice(0, 140),
+                  city,
+                  phone: String(t.phone || t['contact:phone'] || t['contact:mobile'] || '').trim(),
+                  email: String(t.email || t['contact:email'] || '').trim(),
+                  website: String(t.website || t['contact:website'] || t.url || '').trim(),
+                  rating: null,
+                  reviewsCount: null,
+                  sourceEngine,
+                });
+              }
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+
+      // 2. Lightweight Public Website Contact Extractor + Free DNS MX Verification
+      const JUNK_EMAIL_DOMAINS = [
+        'example.com',
+        'sentry.io',
+        'wixpress.com',
+        'wordpress.com',
+        'w3.org',
+        'schema.org',
+        'googleapis.com',
+        'googleusercontent.com',
+        'facebook.com',
+        'instagram.com',
+        'twitter.com',
+        'gravatar.com',
+        'cloudflare.com',
+      ];
+      const JUNK_EMAIL_PREFIXES = ['noreply', 'no-reply', 'donotreply', 'mailer-daemon', 'postmaster'];
+
+      const extractContactsFromHtml = (html) => {
+        const cleanHtml = String(html || '').slice(0, 220000);
+        const emails = new Set();
+        const phones = new Set();
+        let whatsapp = '';
+        const socials = {};
+
+        // Emails (mailto + plain)
+        const emailMatches = cleanHtml.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,8}/g) || [];
+        for (const rawE of emailMatches) {
+          const e = rawE.toLowerCase().trim();
+          const [prefix, dom] = e.split('@');
+          if (!prefix || !dom) continue;
+          if (/\.(png|jpg|jpeg|gif|svg|webp|css|js|woff|pdf)$/i.test(dom)) continue;
+          if (JUNK_EMAIL_DOMAINS.some((jd) => dom === jd || dom.endsWith(`.${jd}`))) continue;
+          if (JUNK_EMAIL_PREFIXES.some((jp) => prefix.startsWith(jp))) continue;
+          emails.add(e);
+        }
+
+        // WhatsApp links
+        const waMatch = cleanHtml.match(/(?:wa\.me\/|api\.whatsapp\.com\/send\?phone=)(\+?[0-9]{10,15})/i);
+        if (waMatch?.[1]) {
+          whatsapp = waMatch[1].startsWith('+') ? waMatch[1] : `+${waMatch[1]}`;
+        }
+
+        // tel: links
+        const telMatches = cleanHtml.match(/href=["']tel:([^"']+)["']/gi) || [];
+        for (const tm of telMatches) {
+          const digits = tm.replace(/.*tel:/i, '').replace(/["']/g, '').trim();
+          const onlyNums = digits.replace(/[^0-9+]/g, '');
+          if (onlyNums.replace(/\+/g, '').length >= 10 && onlyNums.replace(/\+/g, '').length <= 15) {
+            phones.add(onlyNums);
+          }
+        }
+
+        // Social links
+        const ig = cleanHtml.match(/https?:\/\/(?:www\.)?instagram\.com\/[a-zA-Z0-9._-]+/i);
+        const fb = cleanHtml.match(/https?:\/\/(?:www\.)?facebook\.com\/[a-zA-Z0-9._-]+/i);
+        const li = cleanHtml.match(/https?:\/\/(?:www\.)?linkedin\.com\/(?:company|in)\/[a-zA-Z0-9._-]+/i);
+        if (ig?.[0]) socials.instagram = ig[0];
+        if (fb?.[0]) socials.facebook = fb[0];
+        if (li?.[0]) socials.linkedin = li[0];
+
+        return {
+          emails: Array.from(emails),
+          phones: Array.from(phones),
+          whatsapp,
+          socials,
+        };
+      };
+
+      const verifyEmailMx = async (email) => {
+        const clean = String(email || '').trim().toLowerCase();
+        if (!clean || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(clean)) return 'missing';
+        const domain = clean.split('@')[1];
+        try {
+          const mx = await Promise.race([
+            dns.resolveMx(domain),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 2500)),
+          ]);
+          return Array.isArray(mx) && mx.length > 0 ? 'verified' : 'unverified';
+        } catch {
+          return 'unverified';
+        }
+      };
+
+      const enrichOne = async (lead) => {
+        let website = String(lead.website || '').trim();
+        if (website && !/^https?:\/\//i.test(website)) {
+          website = `https://${website}`;
+        }
+        let email = String(lead.email || '').trim().toLowerCase();
+        let phone = String(lead.phone || '').trim();
+        let whatsapp = '';
+        let websiteLive = false;
+        let socials = {};
+
+        if (enrichWebsites && website) {
+          try {
+            const wRes = await fetchWithTimeout(
+              website,
+              {
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (compatible; OzoStackCRM/1.0)',
+                  Accept: 'text/html,application/xhtml+xml',
+                },
+                redirect: 'follow',
+              },
+              4500
+            );
+            if (wRes.ok) {
+              websiteLive = true;
+              const ct = String(wRes.headers.get('content-type') || '');
+              if (ct.includes('text/html')) {
+                const html = await wRes.text();
+                const found = extractContactsFromHtml(html);
+                if (!email && found.emails[0]) email = found.emails[0];
+                if (!phone && found.phones[0]) phone = found.phones[0];
+                if (found.whatsapp) whatsapp = found.whatsapp;
+                socials = found.socials;
+
+                // If still no email, check /contact page once (lightweight)
+                if (!email) {
+                  try {
+                    const baseOrigin = new URL(website).origin;
+                    const cRes = await fetchWithTimeout(
+                      `${baseOrigin}/contact`,
+                      {
+                        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; OzoStackCRM/1.0)' },
+                        redirect: 'follow',
+                      },
+                      3500
+                    );
+                    if (cRes.ok && String(cRes.headers.get('content-type') || '').includes('text/html')) {
+                      const cHtml = await cRes.text();
+                      const cFound = extractContactsFromHtml(cHtml);
+                      if (cFound.emails[0]) email = cFound.emails[0];
+                      if (!phone && cFound.phones[0]) phone = cFound.phones[0];
+                      if (!whatsapp && cFound.whatsapp) whatsapp = cFound.whatsapp;
+                    }
+                  } catch {
+                    /* ignore */
+                  }
+                }
+              }
+            }
+          } catch {
+            websiteLive = false;
+          }
+        }
+
+        const phoneDigits = phone.replace(/[^0-9]/g, '');
+        const phoneVerified = phoneDigits.length >= 10 && phoneDigits.length <= 15;
+        if (!whatsapp && phoneVerified) {
+          whatsapp = phoneDigits.length === 10 ? `+91${phoneDigits}` : `+${phoneDigits}`;
+        }
+
+        const emailStatus = await verifyEmailMx(email);
+        const verificationStatus =
+          emailStatus === 'verified' || (phoneVerified && websiteLive)
+            ? 'Verified'
+            : phoneVerified || email || websiteLive
+            ? 'Partial'
+            : 'Unverified';
+
+        return {
+          ...lead,
+          website,
+          websiteLive,
+          email,
+          emailStatus,
+          phone,
+          phoneVerified,
+          whatsapp,
+          socials,
+          verificationStatus,
+        };
+      };
+
+      // Process with strict concurrency = 4 so Cloud Run CPU/RAM stays super light
+      const enriched = [];
+      const CONCURRENCY = 4;
+      for (let i = 0; i < rawLeads.length; i += CONCURRENCY) {
+        const chunk = rawLeads.slice(i, i + CONCURRENCY);
+        const done = await Promise.all(chunk.map((item) => enrichOne(item)));
+        enriched.push(...done);
+      }
+
+      sendJson(res, 200, {
+        ok: true,
+        sourceEngine,
+        count: enriched.length,
+        leads: enriched,
+      });
+      return;
+    }
+
+    // AI Lead Qualification, Opportunity Detection & Personalized Pitch Agent (Gemini Free Tier)
+    if (pathname === '/api/agents/verify-leads' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const leads = Array.isArray(body.leads) ? body.leads.slice(0, 20) : [];
+      const businessOffer = String(
+        body.businessOffer ||
+          'Custom Software, Website Development, CRM & Digital Growth Services by OzoStack'
+      ).trim();
+      const tone = String(body.tone || 'Professional').trim();
+      const apiKey = String(body.customApiKey || process.env.GEMINI_API_KEY || '').trim();
+
+      if (leads.length === 0) {
+        sendJson(res, 400, { ok: false, error: 'No leads provided to verify.' });
+        return;
+      }
+      if (!apiKey) {
+        sendJson(res, 200, {
+          ok: false,
+          error: 'Gemini API key is not configured on server.',
+        });
+        return;
+      }
+
+      const compactList = leads.map((l) => ({
+        id: l.id,
+        name: l.name,
+        category: l.category,
+        city: l.city,
+        hasPhone: Boolean(l.phoneVerified),
+        hasVerifiedEmail: l.emailStatus === 'verified',
+        hasLiveWebsite: Boolean(l.websiteLive),
+        website: l.website || 'None',
+        rating: l.rating || null,
+      }));
+
+      const prompt = `You are a B2B Sales Qualification & Outreach AI Agent.
+Our company offers: "${businessOffer}".
+Tone: ${tone}.
+
+Analyze these discovered public businesses and return ONLY a valid JSON array (no markdown fences, no extra text) where each object has:
+- "id": exact id from input
+- "aiScore": integer 0-100 (higher if contactable + strong fit for our offer)
+- "priority": "Hot" | "Warm" | "Cold"
+- "opportunity": concise 1-sentence sales opportunity or gap (max 15 words)
+- "pitchEmailSubject": crisp personalized cold email subject line (max 10 words)
+- "pitchEmailBody": short 3-4 line personalized cold email mentioning their business name & category
+- "pitchWhatsApp": short 2-line friendly WhatsApp intro mentioning their business name
+
+Businesses:
+${JSON.stringify(compactList)}`;
+
+      const models = [
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-flash-latest',
+        'gemini-flash-lite-latest',
+      ];
+      let lastErr = 'Gemini API request failed.';
+
+      for (const modelName of models) {
+        try {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+            modelName
+          )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+          const gRes = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature: 0.3,
+                maxOutputTokens: 4096,
+                responseMimeType: 'application/json',
+              },
+            }),
+          });
+          const gData = await gRes.json().catch(() => null);
+          if (gRes.ok && gData?.candidates?.[0]?.content?.parts) {
+            const rawText = gData.candidates[0].content.parts
+              .map((p) => p.text || '')
+              .join('')
+              .trim();
+            const cleaned = rawText.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
+            const parsed = JSON.parse(cleaned);
+            if (Array.isArray(parsed)) {
+              sendJson(res, 200, { ok: true, model: modelName, results: parsed });
+              return;
+            }
+          }
+          lastErr = gData?.error?.message || `HTTP ${gRes.status} from ${modelName}`;
+          if (gRes.status !== 404 && gRes.status !== 503 && gRes.status !== 429) break;
+        } catch (err) {
+          lastErr = err?.message || 'Error calling Gemini API.';
         }
       }
 

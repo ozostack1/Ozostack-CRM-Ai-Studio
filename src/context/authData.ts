@@ -47,6 +47,8 @@ export const MODULE_ALIASES: Record<string, string> = {
   'Todos & Notes': 'To Do & Notes',
   'Notes': 'To Do & Notes',
   'Todos': 'To Do & Notes',
+  'Lead Finder': 'AI Agents',
+  'AI Lead Finder': 'AI Agents',
 };
 
 export interface Role {
