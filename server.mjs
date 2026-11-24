@@ -2332,21 +2332,25 @@ const server = http.createServer(async (req, res) => {
       }
 
       const modelsToTry = [
+        body.model ? preferredModel : 'gemini-2.5-flash-lite',
         preferredModel,
         'gemini-2.5-flash',
-        'gemini-2.5-flash-lite',
-        'gemini-flash-latest',
         'gemini-flash-lite-latest',
+        'gemini-flash-latest',
       ].filter((v, i, arr) => v && arr.indexOf(v) === i);
 
       let lastErr = 'Gemini API request failed.';
       for (const modelName of modelsToTry) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 18000);
         try {
           const payload = {
             contents: [{ role: 'user', parts: [{ text: prompt }] }],
             generationConfig: {
-              temperature: jsonMode ? 0.2 : 0.7,
+              temperature: jsonMode ? 0.25 : 0.7,
+              maxOutputTokens: 4096,
               ...(jsonMode ? { responseMimeType: 'application/json' } : {}),
+              ...(modelName.includes('2.5') ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
             },
           };
           if (systemInstruction) {
@@ -2361,6 +2365,7 @@ const server = http.createServer(async (req, res) => {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(payload),
+              signal: ctrl.signal,
             }
           );
 
@@ -2372,18 +2377,20 @@ const server = http.createServer(async (req, res) => {
               .join('')
               .trim();
             if (text) {
+              clearTimeout(timer);
               sendJson(res, 200, { ok: true, text, model: modelName });
               return;
             }
           }
 
           lastErr = gData?.error?.message || `HTTP ${gRes.status} from ${modelName}`;
-          // Retry next model only if model not found / overloaded
-          if (gRes.status !== 404 && gRes.status !== 503 && gRes.status !== 429) {
+          if (gRes.status !== 404 && gRes.status !== 503 && gRes.status !== 429 && gRes.status !== 400) {
             break;
           }
         } catch (err) {
-          lastErr = err?.message || 'Network error calling Gemini API.';
+          lastErr = err?.name === 'AbortError' ? `${modelName} timed out, switching model...` : (err?.message || 'Network error calling Gemini API.');
+        } finally {
+          clearTimeout(timer);
         }
       }
 
