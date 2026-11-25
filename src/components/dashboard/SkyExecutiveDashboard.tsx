@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Users,
   DollarSign,
@@ -6,6 +6,8 @@ import {
   ClipboardList,
   TrendingUp,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Plus,
   Star,
   Check,
@@ -41,6 +43,7 @@ import {
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useSystemCurrency } from '../../data/currencyService';
+import { useCrmConfig } from '../../data/crmConfig';
 import {
   computeDayRating,
   computeWeeklyStats,
@@ -145,44 +148,6 @@ function isDateInPeriod(dateStr: string | undefined, period: PeriodFilter): bool
 
 const SOURCE_COLORS = ['#2563eb', '#ef4444', '#f59e0b', '#10b981', '#8b5cf6', '#06b6d4', '#ec4899'];
 
-const FUNNEL_STAGES = [
-  {
-    key: 'New Lead',
-    label: 'New Lead',
-    match: ['new', 'new lead'],
-    gradient: 'from-blue-600 to-blue-400',
-    widthPct: 100,
-  },
-  {
-    key: 'Contacted',
-    label: 'Contacted',
-    match: ['contacted', 'follow-up', 'follow up'],
-    gradient: 'from-sky-500 to-cyan-400',
-    widthPct: 86,
-  },
-  {
-    key: 'Qualified',
-    label: 'Qualified',
-    match: ['qualified', 'discovery'],
-    gradient: 'from-emerald-500 to-teal-400',
-    widthPct: 74,
-  },
-  {
-    key: 'Proposal Sent',
-    label: 'Proposal Sent',
-    match: ['proposal', 'proposal sent', 'negotiation', 'contract'],
-    gradient: 'from-orange-500 to-amber-400',
-    widthPct: 62,
-  },
-  {
-    key: 'Won',
-    label: 'Won',
-    match: ['won', 'closed won'],
-    gradient: 'from-green-500 to-emerald-400',
-    widthPct: 50,
-  },
-];
-
 export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
   design,
   defaultDesign,
@@ -196,6 +161,8 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
   const { theme, setActiveNav } = useTheme();
   const { currentUser, impersonator, scopeFilter } = useAuth();
   const { currency, formatMoney } = useSystemCurrency();
+  const { config: crmConfig } = useCrmConfig();
+  const leadsKanbanRef = useRef<HTMLDivElement | null>(null);
   const isLight = theme === 'white-sky';
   const userId = currentUser?.id || '';
 
@@ -468,22 +435,68 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
     };
   }, [periodLeads, scopedProjects, scopedTasks, scopedDeals]);
 
-  // Funnel data
+  // Dynamic union of ALL configured CRM lead stages + any custom statuses found on actual leads
+  const dynamicLeadStages = useMemo(() => {
+    const map = new Map<string, { name: string; color: string }>();
+    const normStage = (s: string) => s.trim().toLowerCase();
+
+    (crmConfig.leadStages || []).forEach((st, idx) => {
+      const clean = (st.name || '').trim();
+      if (!clean) return;
+      const k = normStage(clean);
+      if (!map.has(k)) {
+        map.set(k, {
+          name: clean,
+          color: st.color || SOURCE_COLORS[idx % SOURCE_COLORS.length],
+        });
+      }
+    });
+
+    scopedLeads.forEach((lead) => {
+      const rawStatus = (lead.status || 'New Lead').trim() || 'New Lead';
+      const k = normStage(rawStatus);
+      // Map bare "new" to "New Lead" if "new lead" exists and "new" isn't a separate configured stage
+      if (k === 'new' && map.has('new lead')) return;
+      if (!map.has(k)) {
+        map.set(k, {
+          name: rawStatus,
+          color: SOURCE_COLORS[map.size % SOURCE_COLORS.length],
+        });
+      }
+    });
+
+    return Array.from(map.values());
+  }, [crmConfig.leadStages, scopedLeads]);
+
+  // Funnel data (100% synced with all configured + custom stages)
   const funnelData = useMemo(() => {
-    return FUNNEL_STAGES.map((stage) => {
-      const matchedLeads = periodLeads.filter((l) =>
-        stage.match.includes((l.status || '').trim().toLowerCase())
-      );
-      const matchedDeals = scopedDeals.filter((d) =>
-        stage.match.includes((d.stage || '').trim().toLowerCase())
-      );
+    const normStage = (s?: string) => (s || '').trim().toLowerCase();
+    const totalStages = Math.max(1, dynamicLeadStages.length);
+
+    return dynamicLeadStages.map((stage, idx) => {
+      const keyNorm = normStage(stage.name);
+      const matchedLeads = periodLeads.filter((l) => {
+        const s = normStage(l.status || 'New Lead');
+        if (s === keyNorm) return true;
+        if (keyNorm === 'new lead' && s === 'new') return true;
+        return false;
+      });
+      const matchedDeals = scopedDeals.filter((d) => normStage(d.stage) === keyNorm);
       const count = matchedLeads.length + matchedDeals.length;
       const value =
         matchedLeads.reduce((s, l) => s + parseMoney(l.value), 0) +
         matchedDeals.reduce((s, d) => s + parseMoney(d.value), 0);
-      return { ...stage, count, value };
+      const widthPct = Math.round(100 - (idx / Math.max(1, totalStages - 1)) * 45);
+      return {
+        key: stage.name,
+        label: stage.name,
+        color: stage.color,
+        widthPct: totalStages === 1 ? 100 : widthPct,
+        count,
+        value,
+      };
     });
-  }, [periodLeads, scopedDeals]);
+  }, [dynamicLeadStages, periodLeads, scopedDeals]);
 
   // Lead Sources Donut
   const sourceSlices = useMemo(() => {
@@ -512,52 +525,26 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
     });
   }, [periodLeads]);
 
-  // Leads Kanban Columns
+  // Leads Kanban Columns — dynamically includes ALL default + custom stages so 100% of leads show
   const leadsKanbanColumns = useMemo(() => {
-    const defs = [
-      {
-        title: 'New Lead',
-        match: ['new', 'new lead'],
-        headerBg: isLight ? 'bg-blue-50 text-blue-700' : 'bg-blue-950/50 text-blue-300',
-        colBg: isLight ? 'bg-blue-50/40 border-blue-100' : 'bg-blue-950/15 border-blue-900/40',
-        avatarBg: 'bg-blue-500',
-      },
-      {
-        title: 'Contacted',
-        match: ['contacted', 'follow-up', 'follow up'],
-        headerBg: isLight ? 'bg-sky-50 text-sky-700' : 'bg-sky-950/50 text-sky-300',
-        colBg: isLight ? 'bg-sky-50/40 border-sky-100' : 'bg-sky-950/15 border-sky-900/40',
-        avatarBg: 'bg-sky-500',
-      },
-      {
-        title: 'Qualified',
-        match: ['qualified'],
-        headerBg: isLight ? 'bg-emerald-50 text-emerald-700' : 'bg-emerald-950/50 text-emerald-300',
-        colBg: isLight ? 'bg-emerald-50/40 border-emerald-100' : 'bg-emerald-950/15 border-emerald-900/40',
-        avatarBg: 'bg-emerald-500',
-      },
-      {
-        title: 'Proposal',
-        match: ['proposal', 'proposal sent', 'negotiation'],
-        headerBg: isLight ? 'bg-amber-50 text-amber-700' : 'bg-amber-950/50 text-amber-300',
-        colBg: isLight ? 'bg-amber-50/40 border-amber-100' : 'bg-amber-950/15 border-amber-900/40',
-        avatarBg: 'bg-amber-500',
-      },
-      {
-        title: 'Won',
-        match: ['won', 'closed won'],
-        headerBg: isLight ? 'bg-teal-50 text-teal-700' : 'bg-teal-950/50 text-teal-300',
-        colBg: isLight ? 'bg-teal-50/40 border-teal-100' : 'bg-teal-950/15 border-teal-900/40',
-        avatarBg: 'bg-teal-500',
-      },
-    ];
-    return defs.map((col) => ({
-      ...col,
-      items: scopedLeads.filter((l) => col.match.includes((l.status || '').trim().toLowerCase())),
-    }));
-  }, [scopedLeads, isLight]);
+    const normStage = (s?: string) => (s || '').trim().toLowerCase();
+    return dynamicLeadStages.map((stage) => {
+      const keyNorm = normStage(stage.name);
+      const items = scopedLeads.filter((l) => {
+        const s = normStage(l.status || 'New Lead');
+        if (s === keyNorm) return true;
+        if (keyNorm === 'new lead' && s === 'new') return true;
+        return false;
+      });
+      return {
+        title: stage.name,
+        color: stage.color,
+        items,
+      };
+    });
+  }, [dynamicLeadStages, scopedLeads]);
 
-  // Tasks Kanban Columns
+  // Tasks Kanban Columns — includes standard 4 + any Blocked/custom statuses dynamically
   const tasksKanbanColumns = useMemo(() => {
     const defs = [
       {
@@ -585,6 +572,19 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
         badge: isLight ? 'text-emerald-700' : 'text-emerald-300',
       },
     ];
+    const knownKeys = new Set(defs.map((d) => d.key));
+    scopedTasks.forEach((t) => {
+      const st = (t.status || '').trim();
+      if (st && !knownKeys.has(st)) {
+        knownKeys.add(st);
+        defs.push({
+          key: st,
+          title: st,
+          colBg: isLight ? 'bg-rose-50/50 border-rose-100' : 'bg-rose-950/20 border-rose-900/40',
+          badge: isLight ? 'text-rose-700' : 'text-rose-300',
+        });
+      }
+    });
     return defs.map((col) => ({
       ...col,
       items: scopedTasks.filter((t) => t.status === col.key),
@@ -1072,7 +1072,7 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
                 <ArrowRight className="w-3 h-3" />
               </button>
             </div>
-            <div className="space-y-2.5 flex-1 flex flex-col justify-center">
+            <div className="space-y-2 flex-1 max-h-[260px] overflow-y-auto pr-1">
               {funnelData.map((stage) => (
                 <button
                   key={stage.key}
@@ -1082,8 +1082,12 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
                 >
                   <div className="flex-1 flex justify-start">
                     <div
-                      className={`h-9 rounded-xl bg-gradient-to-r ${stage.gradient} text-white px-3 flex items-center justify-between shadow-2xs transition-transform group-hover:scale-[1.01]`}
-                      style={{ width: `${stage.widthPct}%`, minWidth: '115px' }}
+                      className="h-8 rounded-xl text-white px-3 flex items-center justify-between shadow-2xs transition-transform group-hover:scale-[1.01]"
+                      style={{
+                        width: `${stage.widthPct}%`,
+                        minWidth: '115px',
+                        background: `linear-gradient(90deg, ${stage.color}, ${stage.color}cc)`,
+                      }}
                     >
                       <span className="text-xs font-bold truncate">{stage.label}</span>
                     </div>
@@ -1181,34 +1185,86 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
       case 'leads-kanban':
         return (
           <div className={`p-4 sm:p-5 rounded-2xl border h-full ${cardClass}`}>
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
               <div>
-                <h2 className="text-sm font-extrabold">Leads Kanban</h2>
+                <h2 className="text-sm font-extrabold">
+                  Leads Kanban{' '}
+                  <span className="text-[11px] font-bold text-slate-400 ml-1">
+                    ({leadsKanbanColumns.length} stages)
+                  </span>
+                </h2>
                 <p className="text-[11px] text-slate-400">
-                  Live leads grouped by stage with instant Call, WhatsApp & Email actions
+                  All default & custom stages synced live with instant Call, WhatsApp & Email
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setActiveNav('Leads')}
-                className="text-xs font-bold text-sky-500 hover:underline inline-flex items-center gap-1"
-              >
-                <span>View All ({scopedLeads.length})</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => leadsKanbanRef.current?.scrollBy({ left: -260, behavior: 'smooth' })}
+                    className={`p-1 rounded-lg border transition-colors ${
+                      isLight
+                        ? 'border-slate-200 hover:bg-slate-100 text-slate-600'
+                        : 'border-slate-700 hover:bg-slate-800 text-slate-300'
+                    }`}
+                    title="Scroll stages left"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => leadsKanbanRef.current?.scrollBy({ left: 260, behavior: 'smooth' })}
+                    className={`p-1 rounded-lg border transition-colors ${
+                      isLight
+                        ? 'border-slate-200 hover:bg-slate-100 text-slate-600'
+                        : 'border-slate-700 hover:bg-slate-800 text-slate-300'
+                    }`}
+                    title="Scroll stages right"
+                  >
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveNav('Leads')}
+                  className="text-xs font-bold text-sky-500 hover:underline inline-flex items-center gap-1"
+                >
+                  <span>View All ({scopedLeads.length})</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
-            <div className="flex gap-2.5 overflow-x-auto pb-1">
+            <div ref={leadsKanbanRef} className="flex gap-2.5 overflow-x-auto pb-2">
               {leadsKanbanColumns.map((col) => (
-                <div key={col.title} className={`rounded-xl border p-2 flex flex-col min-w-[165px] flex-1 ${col.colBg}`}>
-                  <div className={`px-2 py-1 rounded-lg text-[11px] font-extrabold flex items-center justify-between mb-2 ${col.headerBg}`}>
-                    <span className="truncate">{col.title}</span>
-                    <span className="opacity-80">({col.items.length})</span>
+                <div
+                  key={col.title}
+                  className="rounded-xl border p-2 flex flex-col w-[205px] shrink-0"
+                  style={{
+                    backgroundColor: isLight ? `${col.color}0d` : `${col.color}14`,
+                    borderColor: isLight ? `${col.color}30` : `${col.color}38`,
+                  }}
+                >
+                  <div
+                    className="px-2.5 py-1.5 rounded-lg text-[11px] font-extrabold flex items-center justify-between gap-1.5 mb-2"
+                    style={{
+                      backgroundColor: isLight ? `${col.color}1f` : `${col.color}2b`,
+                      color: isLight ? '#0f172a' : '#f8fafc',
+                    }}
+                  >
+                    <span className="inline-flex items-center gap-1.5 min-w-0">
+                      <span
+                        className="w-2 h-2 rounded-full shrink-0"
+                        style={{ backgroundColor: col.color }}
+                      />
+                      <span className="truncate">{col.title}</span>
+                    </span>
+                    <span className="opacity-80 shrink-0">({col.items.length})</span>
                   </div>
-                  <div className="space-y-2 flex-1">
+                  <div className="space-y-2 flex-1 max-h-[320px] overflow-y-auto pr-0.5">
                     {col.items.length === 0 ? (
                       <div className="py-5 text-center text-[10px] text-slate-400">No leads</div>
                     ) : (
-                      col.items.slice(0, 3).map((lead) => (
+                      col.items.map((lead) => (
                         <div
                           key={lead.id}
                           className={`p-2.5 rounded-xl border transition-all hover:shadow-xs ${
@@ -1216,7 +1272,10 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
                           }`}
                         >
                           <div className="flex items-center gap-2">
-                            <div className={`w-6 h-6 rounded-full ${col.avatarBg} text-white text-[10px] font-bold flex items-center justify-center shrink-0`}>
+                            <div
+                              className="w-6 h-6 rounded-full text-white text-[10px] font-bold flex items-center justify-center shrink-0"
+                              style={{ backgroundColor: col.color }}
+                            >
                               {getInitials(lead.name)}
                             </div>
                             <div className="min-w-0 flex-1">
@@ -1374,11 +1433,11 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
                     <span>{col.title}</span>
                     <span className="text-[10px] opacity-75">({col.items.length})</span>
                   </div>
-                  <div className="space-y-1.5">
+                  <div className="space-y-1.5 max-h-[280px] overflow-y-auto pr-0.5">
                     {col.items.length === 0 ? (
                       <div className="py-4 text-center text-[10px] text-slate-400">Empty</div>
                     ) : (
-                      col.items.slice(0, 4).map((task) => {
+                      col.items.map((task) => {
                         const done = task.status === 'Completed';
                         return (
                           <button
