@@ -38,10 +38,13 @@ import {
   ProjectHealth,
   ProjectActivity,
   ProjectActivityType,
+  TaskAttachment,
 } from '../../types/crm';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useSystemCurrency } from '../../data/currencyService';
+import { TaskAttachmentsPanel } from '../tasks/TaskAttachmentsPanel';
+import { isImageAttachment } from '../../data/attachmentService';
 
 const getTodayIso = () => {
   const d = new Date();
@@ -110,6 +113,7 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({
   );
   const [newTaskPriority, setNewTaskPriority] = useState<ProjectTaskItem['priority']>('High');
   const [newTaskDueDate, setNewTaskDueDate] = useState(() => project?.deadline || getTodayIso());
+  const [newTaskAttachments, setNewTaskAttachments] = useState<TaskAttachment[]>([]);
 
   useEffect(() => {
     setNewTaskAssignee(project?.team?.[0] || project?.projectManager || authorName);
@@ -204,11 +208,12 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({
     const newTaskItem: ProjectTaskItem = {
       id: `task-${Date.now()}`,
       title: newTaskTitle.trim(),
-      assignee: newTaskAssignee || project?.team?.[0] || project?.projectManager || 'Sayed (CEO)',
+      assignee: newTaskAssignee || project?.team?.[0] || project?.projectManager || authorName,
       priority: newTaskPriority,
       status: 'To Do',
       dueDate: newTaskDueDate,
       completed: false,
+      attachments: newTaskAttachments.length > 0 ? newTaskAttachments : undefined,
     };
 
     const updatedTasks = [newTaskItem, ...effectiveTasks];
@@ -228,10 +233,13 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({
     onLogActivity?.(
       project.id,
       'task',
-      `New work item created: "${newTaskTitle.trim()}" (Assigned: ${newTaskItem.assignee}, Priority: ${newTaskPriority})`
+      `New work item created: "${newTaskTitle.trim()}" (Assigned: ${newTaskItem.assignee}, Priority: ${newTaskPriority}${
+        newTaskAttachments.length > 0 ? `, ${newTaskAttachments.length} attachment(s)` : ''
+      })`
     );
 
     setNewTaskTitle('');
+    setNewTaskAttachments([]);
     setIsAddingTask(false);
   };
 
@@ -1095,6 +1103,13 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({
                           />
                         </div>
                       </div>
+
+                      <TaskAttachmentsPanel
+                        compact
+                        title="Screenshots / PDF Proof"
+                        attachments={newTaskAttachments}
+                        onChange={setNewTaskAttachments}
+                      />
                     </div>
 
                     <div className="flex justify-end gap-2 pt-1">
@@ -1296,6 +1311,51 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({
                                   </span>
                                 )}
                               </div>
+
+                              {/* Attached Screenshots / PDFs & Per-File Issue Notes */}
+                              {t.attachments && t.attachments.length > 0 && (
+                                <div
+                                  className="mt-2 flex flex-wrap gap-2"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  {t.attachments.map((att) => (
+                                    <a
+                                      key={att.id}
+                                      href={att.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className={`flex items-center gap-2 p-1.5 pr-2.5 rounded-lg border max-w-full transition-colors ${
+                                        isLight
+                                          ? 'bg-sky-50/60 border-sky-200 hover:border-sky-400'
+                                          : 'bg-slate-800/80 border-slate-700 hover:border-sky-500'
+                                      }`}
+                                      title={att.issueNote || att.name}
+                                    >
+                                      {isImageAttachment(att) ? (
+                                        <img
+                                          src={att.url}
+                                          alt={att.name}
+                                          className="w-9 h-7 object-cover rounded shrink-0"
+                                        />
+                                      ) : (
+                                        <span className="w-9 h-7 rounded bg-rose-500/15 text-rose-500 flex items-center justify-center shrink-0">
+                                          <FileText className="w-3.5 h-3.5" />
+                                        </span>
+                                      )}
+                                      <div className="min-w-0">
+                                        <div className="text-[10px] font-bold truncate max-w-[160px] text-slate-800 dark:text-slate-100">
+                                          {att.name}
+                                        </div>
+                                        {att.issueNote && (
+                                          <div className="text-[10px] text-amber-600 dark:text-amber-400 truncate max-w-[180px]">
+                                            {att.issueNote}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </a>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           </div>
 

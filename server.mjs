@@ -29,7 +29,9 @@ const DB_NAME = process.env.DB_NAME || 'ozo_one';
 const KV_COLLECTION = 'ozostack_crm_kv';
 const META_COLLECTION = 'ozostack_crm_meta';
 const BACKUP_COLLECTION = 'ozostack_crm_backups';
+const ATTACHMENTS_COLLECTION = 'ozostack_crm_attachments';
 const MIGRATION_ID = 'ozostack_ai_studio_migrated_v1';
+const memoryAttachments = new Map();
 const SMTP_KV_KEY = 'ozostack_smtp_config_v1';
 
 let dbInstance = null;
@@ -59,6 +61,7 @@ async function getDb() {
               col.name !== KV_COLLECTION &&
               col.name !== META_COLLECTION &&
               col.name !== BACKUP_COLLECTION &&
+              col.name !== ATTACHMENTS_COLLECTION &&
               !col.name.startsWith('system.')
             ) {
               await db.collection(col.name).drop().catch(() => {});
@@ -1266,6 +1269,110 @@ const server = http.createServer(async (req, res) => {
         dbConnected: Boolean(db),
         service: 'ozostack-crm-ai-studio',
       });
+      return;
+    }
+
+    // Upload task / issue attachment (screenshot image or PDF) into MongoDB
+    if (pathname === '/api/attachments/upload' && req.method === 'POST') {
+      const body = await readJsonBody(req, 10 * 1024 * 1024);
+      const allowedMimes = new Set([
+        'image/png',
+        'image/jpeg',
+        'image/webp',
+        'image/gif',
+        'application/pdf',
+      ]);
+      const mimeType = String(body.mimeType || '').toLowerCase().trim();
+      const rawBase64 = String(body.dataBase64 || '').replace(/^data:[^;]+;base64,/, '').trim();
+      if (!allowedMimes.has(mimeType)) {
+        sendJson(res, 400, { ok: false, error: 'Only PNG, JPG, WEBP, GIF, and PDF files are allowed.' });
+        return;
+      }
+      if (!rawBase64) {
+        sendJson(res, 400, { ok: false, error: 'Empty file payload.' });
+        return;
+      }
+      const decodedSize = Buffer.byteLength(rawBase64, 'base64');
+      if (decodedSize > 6 * 1024 * 1024) {
+        sendJson(res, 400, { ok: false, error: 'File exceeds 6 MB maximum size.' });
+        return;
+      }
+      const safeName = String(body.name || 'attachment')
+        .replace(/[^\w.\-\s()]/g, '_')
+        .slice(0, 120);
+      const id = `att_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const uploadedAt = new Date().toISOString();
+      const uploadedBy = String(body.uploadedBy || 'Staff').slice(0, 80);
+      const doc = {
+        _id: id,
+        name: safeName,
+        mimeType,
+        size: decodedSize,
+        dataBase64: rawBase64,
+        uploadedBy,
+        uploadedAt,
+      };
+      const db = await getDb();
+      if (db) {
+        await db.collection(ATTACHMENTS_COLLECTION).insertOne(doc);
+      } else {
+        memoryAttachments.set(id, doc);
+      }
+      sendJson(res, 200, {
+        ok: true,
+        attachment: {
+          id,
+          name: safeName,
+          mimeType,
+          size: decodedSize,
+          url: `/api/attachments/${id}`,
+          uploadedBy,
+          uploadedAt,
+        },
+      });
+      return;
+    }
+
+    // Serve uploaded attachment inline (image preview or PDF viewer)
+    if (pathname.startsWith('/api/attachments/') && req.method === 'GET') {
+      const id = pathname.slice('/api/attachments/'.length).trim();
+      if (!id || !/^att_[a-zA-Z0-9_]+$/.test(id)) {
+        sendJson(res, 400, { ok: false, error: 'Invalid attachment ID.' });
+        return;
+      }
+      const db = await getDb();
+      const doc = db
+        ? await db.collection(ATTACHMENTS_COLLECTION).findOne({ _id: id })
+        : memoryAttachments.get(id);
+      if (!doc || !doc.dataBase64) {
+        sendJson(res, 404, { ok: false, error: 'Attachment not found.' });
+        return;
+      }
+      const buf = Buffer.from(doc.dataBase64, 'base64');
+      const dispName = String(doc.name || 'file').replace(/"/g, '');
+      res.writeHead(200, {
+        'Content-Type': doc.mimeType || 'application/octet-stream',
+        'Content-Length': buf.length,
+        'Content-Disposition': `inline; filename="${dispName}"`,
+        'Cache-Control': 'public, max-age=31536000, immutable',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.end(buf);
+      return;
+    }
+
+    // Delete uploaded attachment from MongoDB
+    if (pathname.startsWith('/api/attachments/') && req.method === 'DELETE') {
+      const id = pathname.slice('/api/attachments/'.length).trim();
+      if (id && /^att_[a-zA-Z0-9_]+$/.test(id)) {
+        const db = await getDb();
+        if (db) {
+          await db.collection(ATTACHMENTS_COLLECTION).deleteOne({ _id: id }).catch(() => {});
+        } else {
+          memoryAttachments.delete(id);
+        }
+      }
+      sendJson(res, 200, { ok: true });
       return;
     }
 

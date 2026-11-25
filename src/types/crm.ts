@@ -443,6 +443,7 @@ export interface ProjectTaskItem {
   priority: 'Urgent' | 'High' | 'Medium' | 'Low' | 'Critical';
   dueDate: string;
   completed: boolean;
+  attachments?: TaskAttachment[];
 }
 
 export type ProjectActivityType =
@@ -509,6 +510,17 @@ export interface TaskSubtask {
   completed: boolean;
 }
 
+export interface TaskAttachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  url: string;
+  issueNote?: string;
+  uploadedBy?: string;
+  uploadedAt: string;
+}
+
 export interface TaskItem {
   id: string;
   title: string;
@@ -524,6 +536,7 @@ export interface TaskItem {
   estimatedHours: number;
   loggedHours: number;
   subtasks?: TaskSubtask[];
+  attachments?: TaskAttachment[];
   tags?: string[];
   commentsCount?: number;
   createdAt: string;

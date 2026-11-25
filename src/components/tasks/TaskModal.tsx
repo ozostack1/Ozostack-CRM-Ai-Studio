@@ -20,9 +20,11 @@ import {
   TaskPriority,
   TaskCategory,
   TaskSubtask,
+  TaskAttachment,
 } from '../../types/crm';
 import { useTheme } from '../../context/ThemeContext';
 import { getActualSavedProjects, getLinkedProjectOptions } from '../../data/projectDirectory';
+import { TaskAttachmentsPanel } from './TaskAttachmentsPanel';
 
 interface TaskModalProps {
   isOpen: boolean;
@@ -73,6 +75,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
   const [description, setDescription] = useState('');
   const [tagsInput, setTagsInput] = useState('');
   const [subtasks, setSubtasks] = useState<TaskSubtask[]>([]);
+  const [attachments, setAttachments] = useState<TaskAttachment[]>([]);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
 
   useEffect(() => {
@@ -91,6 +94,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
       setDescription(taskToEdit.description || '');
       setTagsInput(taskToEdit.tags ? taskToEdit.tags.join(', ') : '');
       setSubtasks(taskToEdit.subtasks || []);
+      setAttachments(taskToEdit.attachments || []);
     } else {
       const savedProjects = getActualSavedProjects();
       const firstActual = savedProjects[0];
@@ -110,6 +114,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
       setDescription('');
       setTagsInput('');
       setSubtasks([]);
+      setAttachments([]);
     }
     setNewSubtaskTitle('');
   }, [taskToEdit, isOpen, defaultStatus, availableProjects, availableAssignees]);
@@ -162,6 +167,7 @@ export const TaskModal: React.FC<TaskModalProps> = ({
       estimatedHours: Number(estimatedHours) || 0,
       loggedHours: Number(loggedHours) || 0,
       subtasks,
+      attachments: attachments.length > 0 ? attachments : undefined,
       tags: tags.length > 0 ? tags : undefined,
       commentsCount: taskToEdit?.commentsCount ?? 0,
       createdAt: taskToEdit?.createdAt || new Date().toISOString().split('T')[0],
@@ -498,6 +504,12 @@ export const TaskModal: React.FC<TaskModalProps> = ({
               }`}
             />
           </div>
+
+          {/* Issue Screenshots & PDF Attachments (with per-file issue note) */}
+          <TaskAttachmentsPanel
+            attachments={attachments}
+            onChange={setAttachments}
+          />
 
           {/* Interactive Subtasks Checklist */}
           <div>

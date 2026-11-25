@@ -26,8 +26,10 @@ import {
   TaskPriority,
   TaskCategory,
   TaskSubtask,
+  TaskAttachment,
 } from '../../types/crm';
 import { useTheme } from '../../context/ThemeContext';
+import { TaskAttachmentsPanel } from './TaskAttachmentsPanel';
 
 interface TaskDetailsDrawerProps {
   isOpen: boolean;
@@ -432,11 +434,24 @@ export const TaskDetailsDrawer: React.FC<TaskDetailsDrawerProps> = ({
                     <h3 className="font-bold text-xs text-slate-700 dark:text-slate-200 mb-2">
                       Engineering Scope & Description
                     </h3>
-                    <p className="text-slate-600 dark:text-slate-300 leading-relaxed text-xs">
+                    <p className="text-slate-600 dark:text-slate-300 leading-relaxed text-xs whitespace-pre-line">
                       {task.description}
                     </p>
                   </div>
                 )}
+
+                {/* Issue Screenshots, PDFs & Per-File Notes */}
+                <div className={`p-4 rounded-xl border ${isLight ? 'bg-slate-50/70 border-sky-100' : 'bg-slate-800/40 border-slate-700'}`}>
+                  <TaskAttachmentsPanel
+                    attachments={task.attachments || []}
+                    onChange={(nextAttachments: TaskAttachment[]) =>
+                      onUpdateTask({
+                        ...task,
+                        attachments: nextAttachments,
+                      })
+                    }
+                  />
+                </div>
 
                 {/* Tags */}
                 {task.tags && task.tags.length > 0 && (

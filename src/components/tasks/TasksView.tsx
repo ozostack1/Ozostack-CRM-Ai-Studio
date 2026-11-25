@@ -27,6 +27,7 @@ import {
   Layers,
   ChevronRight,
   ShieldCheck,
+  Paperclip,
 } from 'lucide-react';
 import {
   TaskItem,
@@ -1060,9 +1061,20 @@ export const TasksView: React.FC = () => {
 
                             {/* Effort & Due Date row */}
                             <div className="flex items-center justify-between text-[10px] p-2 rounded-lg bg-sky-50/40 dark:bg-slate-800/40 mb-2">
-                              <div className="flex items-center gap-1 text-slate-500 dark:text-slate-400">
-                                <Clock className="w-3 h-3" />
-                                <span className="font-semibold">{task.loggedHours}/{task.estimatedHours}h</span>
+                              <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+                                <span className="flex items-center gap-1">
+                                  <Clock className="w-3 h-3" />
+                                  <span className="font-semibold">{task.loggedHours}/{task.estimatedHours}h</span>
+                                </span>
+                                {task.attachments && task.attachments.length > 0 && (
+                                  <span
+                                    className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-600 dark:text-sky-400 font-bold"
+                                    title={`${task.attachments.length} attachment(s)`}
+                                  >
+                                    <Paperclip className="w-2.5 h-2.5" />
+                                    {task.attachments.length}
+                                  </span>
+                                )}
                               </div>
                               <div className={`font-semibold tabular-nums ${isOverdue ? 'text-rose-500 font-bold' : 'text-slate-600 dark:text-slate-300'}`}>
                                 Due: {task.dueDate}
