@@ -48,7 +48,6 @@ import {
   CALENDAR_EVENTS,
   INITIAL_FOLLOW_UPS,
   INITIAL_DOCUMENTS,
-  INITIAL_DETAILED_INVOICES,
 } from '../data/mockData';
 import { DEFAULT_TODOS } from '../data/personalNotesTodosData';
 
@@ -227,7 +226,7 @@ export const Sidebar: React.FC = () => {
         );
         return { owner: [doc.uploadedBy, proj?.projectManager, ...(proj?.team || [])] };
       }).length,
-      Invoices: INITIAL_DETAILED_INVOICES.length,
+      Invoices: readLS('ozostack_invoices', []).length,
       Email: readLS<{ folder?: string; read?: boolean }>(
         `ozostack_mailbox_user_v2_${currentUser?.id || 'anonymous'}`,
         []

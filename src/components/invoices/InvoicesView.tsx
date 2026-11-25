@@ -124,9 +124,10 @@ export const InvoicesView: React.FC = () => {
   const [selectedDoc, setSelectedDoc] = useState<any>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // Sync to Local Storage
+  // Sync to Local Storage and notify sidebar badge
   useEffect(() => {
     localStorage.setItem(STORAGE_INVOICES_KEY, JSON.stringify(invoices));
+    window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
   }, [invoices]);
 
   useEffect(() => {
