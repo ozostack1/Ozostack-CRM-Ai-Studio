@@ -208,19 +208,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     (module: string, action: PermAction = 'view') => {
       if (!currentUser || !currentRole) return false;
       const key = MODULE_ALIASES[module] || module;
-      if (
-        key === 'To Do & Notes' ||
-        key === 'Email' ||
-        key === 'WhatsApp' ||
-        key === 'Workflows' ||
-        key === 'AI Automation' ||
-        isSuperAdmin
-      )
+      if (key === 'To Do & Notes') return true;
+      if (isSuperAdmin) {
+        if (key === 'Settings') return true;
+        if (Object.prototype.hasOwnProperty.call(currentRole.permissions, key)) {
+          return currentRole.permissions[key]?.includes(action) || false;
+        }
         return true;
+      }
       if (currentRole.permissions[key]?.includes(action)) return true;
       return ['view', 'create', 'edit'].includes(action) && currentUser.extraModules.includes(key);
     },
-    [currentUser, currentRole]
+    [currentUser, currentRole, isSuperAdmin]
   );
 
   const scopeFilter = useCallback(
