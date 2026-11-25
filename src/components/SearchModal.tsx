@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Search, X, Briefcase, Users, FileText, CheckSquare, ArrowRight, Mail, MessageSquare, ListTodo, StickyNote } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import { RECENT_DEALS, OVERDUE_TASKS, INVOICES, INITIAL_LEADS } from '../data/mockData';
+import { RECENT_DEALS, OVERDUE_TASKS, INITIAL_LEADS } from '../data/mockData';
 import { loadTemplates } from '../data/templateData';
 import { loadAllTodos, loadAllNotes } from '../data/personalNotesTodosData';
 import { useSystemCurrency, formatMoney } from '../data/currencyService';
@@ -14,7 +14,7 @@ interface SearchModalProps {
 
 export const SearchModal: React.FC<SearchModalProps> = ({ isOpen, onClose }) => {
   const { theme, setActiveNav } = useTheme();
-  const { currentUser } = useAuth();
+  const { currentUser, impersonator, can, scopeFilter } = useAuth();
   const { currency } = useSystemCurrency();
   const isLight = theme === 'white-sky';
   const [query, setQuery] = useState('');
@@ -25,30 +25,41 @@ export const SearchModal: React.FC<SearchModalProps> = ({ isOpen, onClose }) => 
     .replace(/\s*\([^)]*\)/g, '')
     .trim()
     .toLowerCase();
+  const myId = currentUser?.id || '';
 
-  const myTodos = query
-    ? loadAllTodos()
-        .filter(
-          (t) =>
-            (t.ownerName || '').replace(/\s*\([^)]*\)/g, '').trim().toLowerCase() === myCleanName &&
-            (t.title.toLowerCase().includes(query.toLowerCase()) ||
-              (t.notes && t.notes.toLowerCase().includes(query.toLowerCase())) ||
-              (t.category && t.category.toLowerCase().includes(query.toLowerCase())))
-        )
-        .slice(0, 5)
-    : [];
+  const myTodos =
+    query && !impersonator
+      ? loadAllTodos()
+          .filter((t) => {
+            const owned = t.ownerId
+              ? Boolean(myId && t.ownerId === myId)
+              : (t.ownerName || '').replace(/\s*\([^)]*\)/g, '').trim().toLowerCase() === myCleanName;
+            return (
+              owned &&
+              (t.title.toLowerCase().includes(query.toLowerCase()) ||
+                (t.notes && t.notes.toLowerCase().includes(query.toLowerCase())) ||
+                (t.category && t.category.toLowerCase().includes(query.toLowerCase())))
+            );
+          })
+          .slice(0, 5)
+      : [];
 
-  const myNotes = query
-    ? loadAllNotes()
-        .filter(
-          (n) =>
-            (n.ownerName || '').replace(/\s*\([^)]*\)/g, '').trim().toLowerCase() === myCleanName &&
-            (n.title.toLowerCase().includes(query.toLowerCase()) ||
-              n.content.toLowerCase().includes(query.toLowerCase()) ||
-              n.tags.some((tag) => tag.toLowerCase().includes(query.toLowerCase())))
-        )
-        .slice(0, 5)
-    : [];
+  const myNotes =
+    query && !impersonator
+      ? loadAllNotes()
+          .filter((n) => {
+            const owned = n.ownerId
+              ? Boolean(myId && n.ownerId === myId)
+              : (n.ownerName || '').replace(/\s*\([^)]*\)/g, '').trim().toLowerCase() === myCleanName;
+            return (
+              owned &&
+              (n.title.toLowerCase().includes(query.toLowerCase()) ||
+                n.content.toLowerCase().includes(query.toLowerCase()) ||
+                n.tags.some((tag) => tag.toLowerCase().includes(query.toLowerCase())))
+            );
+          })
+          .slice(0, 5)
+      : [];
 
   const storedLeads = (() => {
     try {
@@ -61,12 +72,14 @@ export const SearchModal: React.FC<SearchModalProps> = ({ isOpen, onClose }) => 
     return INITIAL_LEADS;
   })();
 
-  const leads = storedLeads.filter(
-    (l) =>
-      l.name.toLowerCase().includes(query.toLowerCase()) ||
-      l.company.toLowerCase().includes(query.toLowerCase()) ||
-      l.email.toLowerCase().includes(query.toLowerCase())
-  );
+  const leads = can('Leads')
+    ? scopeFilter(storedLeads, (l: any) => ({ owner: l.owner })).filter(
+        (l: any) =>
+          (l.name || '').toLowerCase().includes(query.toLowerCase()) ||
+          (l.company || '').toLowerCase().includes(query.toLowerCase()) ||
+          (l.email || '').toLowerCase().includes(query.toLowerCase())
+      )
+    : [];
 
   const storedDeals = (() => {
     try {
@@ -79,11 +92,13 @@ export const SearchModal: React.FC<SearchModalProps> = ({ isOpen, onClose }) => 
     return null;
   })();
 
-  const deals = (storedDeals || RECENT_DEALS).filter(
-    (d: any) =>
-      (d.dealName || d.project || '').toLowerCase().includes(query.toLowerCase()) ||
-      (d.company || d.client || '').toLowerCase().includes(query.toLowerCase())
-  );
+  const deals = can('Deals')
+    ? scopeFilter(storedDeals || RECENT_DEALS, (d: any) => ({ owner: d.owner })).filter(
+        (d: any) =>
+          (d.dealName || d.project || '').toLowerCase().includes(query.toLowerCase()) ||
+          (d.company || d.client || '').toLowerCase().includes(query.toLowerCase())
+      )
+    : [];
 
   const storedTasks = (() => {
     try {
@@ -96,26 +111,42 @@ export const SearchModal: React.FC<SearchModalProps> = ({ isOpen, onClose }) => 
     return null;
   })();
 
-  const tasks = (storedTasks || OVERDUE_TASKS).filter(
-    (t: any) =>
-      (t.taskName || t.title || '').toLowerCase().includes(query.toLowerCase()) ||
-      (t.project || '').toLowerCase().includes(query.toLowerCase())
-  );
-
-  const invoices = INVOICES.filter(
-    (i) =>
-      i.invoiceNumber.toLowerCase().includes(query.toLowerCase()) ||
-      i.client.toLowerCase().includes(query.toLowerCase())
-  );
-
-  const templatesList = query
-    ? loadTemplates().filter(
-        (t) =>
-          t.name.toLowerCase().includes(query.toLowerCase()) ||
-          t.category.toLowerCase().includes(query.toLowerCase()) ||
-          (t.subject && t.subject.toLowerCase().includes(query.toLowerCase()))
+  const tasks = can('Tasks')
+    ? scopeFilter(storedTasks || OVERDUE_TASKS, (t: any) => ({ owner: t.assignee })).filter(
+        (t: any) =>
+          (t.taskName || t.title || '').toLowerCase().includes(query.toLowerCase()) ||
+          (t.project || '').toLowerCase().includes(query.toLowerCase())
       )
     : [];
+
+  const storedInvoices = (() => {
+    try {
+      const raw = localStorage.getItem('ozostack_invoices');
+      if (raw !== null) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return [];
+  })();
+
+  const invoices = can('Invoices')
+    ? storedInvoices.filter(
+        (i: any) =>
+          (i.invoiceNumber || '').toLowerCase().includes(query.toLowerCase()) ||
+          (i.client || '').toLowerCase().includes(query.toLowerCase())
+      )
+    : [];
+
+  const templatesList =
+    query && can('Templates')
+      ? loadTemplates().filter(
+          (t) =>
+            t.name.toLowerCase().includes(query.toLowerCase()) ||
+            t.category.toLowerCase().includes(query.toLowerCase()) ||
+            (t.subject && t.subject.toLowerCase().includes(query.toLowerCase()))
+        )
+      : [];
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center pt-20 p-4 bg-slate-900/60 backdrop-blur-xs">

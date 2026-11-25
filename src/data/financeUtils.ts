@@ -8,6 +8,7 @@ import {
   PnLLineItem,
   RevenueTransaction,
 } from '../types/crm';
+import { getActiveAuthScope } from './projectDirectory';
 
 export type FinanceTimePeriod = 'This Month' | 'This Quarter' | 'YTD' | 'All Time';
 
@@ -67,6 +68,12 @@ function readJsonArray<T = any>(key: string): T[] {
 
 export function getRealCrmClients(): RealCrmClientOption[] {
   const map = new Map<string, RealCrmClientOption>();
+  const { isSuperAdmin, myName, canView } = getActiveAuthScope();
+  const norm = (s?: string) =>
+    (s || '')
+      .replace(/\s*\([^)]*\)/g, '')
+      .trim()
+      .toLowerCase();
 
   const add = (name?: string, email?: string, phone?: string, project?: string) => {
     const cleanName = String(name || '').trim();
@@ -88,18 +95,34 @@ export function getRealCrmClients(): RealCrmClientOption[] {
     }
   };
 
-  readJsonArray('ozostack_companies_v1').forEach((c: any) =>
-    add(c.name, c.email, c.phone)
-  );
-  readJsonArray('ozostack_leads_v2').forEach((l: any) =>
-    add(l.company || l.name, l.email, l.phone, l.title)
-  );
-  readJsonArray('ozostack_contacts_v1').forEach((c: any) =>
-    add(c.company || c.name, c.email, c.phone)
-  );
-  readJsonArray('ozostack_projects').forEach((p: any) =>
-    add(p.client, '', '', p.name)
-  );
+  if (isSuperAdmin || canView('Companies')) {
+    readJsonArray('ozostack_companies_v1')
+      .filter((c: any) => isSuperAdmin || (myName && norm(c.accountOwner) === myName))
+      .forEach((c: any) => add(c.name, c.email, c.phone));
+  }
+
+  if (isSuperAdmin || canView('Leads')) {
+    readJsonArray('ozostack_leads_v2')
+      .filter((l: any) => isSuperAdmin || (myName && norm(l.owner) === myName))
+      .forEach((l: any) => add(l.company || l.name, l.email, l.phone, l.title));
+  }
+
+  if (isSuperAdmin || canView('Contacts')) {
+    readJsonArray('ozostack_contacts_v1')
+      .filter((c: any) => isSuperAdmin || (myName && norm(c.dealOwner) === myName))
+      .forEach((c: any) => add(c.company || c.name, c.email, c.phone));
+  }
+
+  if (isSuperAdmin || canView('Projects')) {
+    readJsonArray('ozostack_projects')
+      .filter((p: any) => {
+        if (isSuperAdmin) return true;
+        if (!myName) return false;
+        const owners = [p.projectManager, ...(Array.isArray(p.team) ? p.team : [])];
+        return owners.some((o: string) => norm(o) === myName);
+      })
+      .forEach((p: any) => add(p.client, '', '', p.name));
+  }
 
   return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
