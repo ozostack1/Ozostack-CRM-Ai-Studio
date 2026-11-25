@@ -351,6 +351,11 @@ function DashboardContent() {
       <TimeEntryModal
         isOpen={isTimeModalOpen}
         onClose={() => setIsTimeModalOpen(false)}
+        availableMembers={
+          currentUser?.name
+            ? [{ name: currentUser.name, avatar: currentUser.name.slice(0, 2).toUpperCase(), rate: 140 }]
+            : []
+        }
         availableProjects={[
           ...getActualSavedProjects().map((p) => ({
             id: p.id,

@@ -55,9 +55,41 @@ const DEFAULT_MEMBERS = [
 
 export const TimeTrackingView: React.FC = () => {
   const { theme, setActiveNav } = useTheme();
-  const { scopeFilter, currentUser } = useAuth();
+  const { scopeFilter, currentUser, currentRole, users } = useAuth();
   const currency = useSystemCurrency();
   const isLight = theme === 'white-sky';
+  const isSuperAdmin = currentRole?.id === 'super-admin';
+
+  // Scoped real tasks (only tasks assigned to current user for non-Super-Admin)
+  const scopedRealTasks = useMemo(() => {
+    try {
+      const raw = localStorage.getItem('ozostack_tasks_v2');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          return scopeFilter(parsed, (t: any) => ({ owner: t.assignee }));
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    return [];
+  }, [scopeFilter]);
+
+  // Scoped member options: Super Admin sees active users; staff ONLY sees themselves
+  const scopedMemberOptions = useMemo(() => {
+    if (isSuperAdmin) {
+      return users
+        .filter((u) => u.status === 'Active')
+        .map((u) => ({
+          name: u.name,
+          avatar: u.name.slice(0, 2).toUpperCase(),
+          rate: 140,
+        }));
+    }
+    const me = currentUser?.name || 'Staff';
+    return [{ name: me, avatar: me.slice(0, 2).toUpperCase(), rate: 140 }];
+  }, [isSuperAdmin, users, currentUser?.name]);
 
   // Timesheet Entries State
   const [entries, setEntries] = useState<TimeEntry[]>(() => {
@@ -130,9 +162,13 @@ export const TimeTrackingView: React.FC = () => {
   const [timerSeconds, setTimerSeconds] = useState(0);
   const [timerDescription, setTimerDescription] = useState('');
   const [timerProject, setTimerProject] = useState(getActualSavedProjects()[0]?.name || 'Others');
-  const [timerTask, setTimerTask] = useState(INITIAL_TASKS[0]?.title || 'OAuth2 Multi-Factor Authentication Flow');
-  const [timerMember, setTimerMember] = useState('Sayed (CEO)');
+  const [timerTask, setTimerTask] = useState('');
+  const [timerMember, setTimerMember] = useState(currentUser?.name || '');
   const [timerIsBillable, setTimerIsBillable] = useState(true);
+
+  useEffect(() => {
+    if (currentUser?.name) setTimerMember(currentUser.name);
+  }, [currentUser?.name]);
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -537,7 +573,7 @@ export const TimeTrackingView: React.FC = () => {
                   isLight ? 'bg-white border-sky-200 text-slate-700' : 'bg-slate-800 border-slate-700 text-slate-200'
                 }`}
               >
-                {DEFAULT_MEMBERS.map((m) => (
+                {scopedMemberOptions.map((m) => (
                   <option key={m.name} value={m.name}>
                     {m.name.split(' ')[0]} ({currency.symbol}{m.rate}/h)
                   </option>
@@ -1106,7 +1142,7 @@ export const TimeTrackingView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-sky-100/30 dark:divide-slate-800">
-                {DEFAULT_MEMBERS.map((member) => {
+                {scopedMemberOptions.map((member) => {
                   const memberEntries = filteredEntries.filter((e) => e.userName === member.name);
 
                   const getDayHours = (dateStr: string) =>
@@ -1314,8 +1350,8 @@ export const TimeTrackingView: React.FC = () => {
           ...getActualSavedProjects().map((p) => ({ id: p.id, name: p.name, client: p.client })),
           { id: 'others', name: 'Others', client: '' },
         ]}
-        availableTasks={INITIAL_TASKS.map((t) => ({ id: t.id, title: t.title, project: t.project }))}
-        availableMembers={DEFAULT_MEMBERS}
+        availableTasks={scopedRealTasks.map((t: any) => ({ id: t.id, title: t.title, project: t.project }))}
+        availableMembers={scopedMemberOptions}
       />
 
       {/* 9. TOAST FEEDBACK */}

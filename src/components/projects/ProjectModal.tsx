@@ -23,6 +23,7 @@ import {
   ProjectHealth,
 } from '../../types/crm';
 import { getRealCrmClients } from '../../data/financeUtils';
+import { canManageProjectTeam } from '../../data/projectDirectory';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useSystemCurrency } from '../../data/currencyService';
@@ -54,15 +55,6 @@ const STATUS_OPTIONS: ProjectStatus[] = [
 const PRIORITY_OPTIONS: ProjectPriority[] = ['Critical', 'High', 'Medium', 'Low'];
 const HEALTH_OPTIONS: ProjectHealth[] = ['Good', 'At Risk', 'Critical'];
 
-const MANAGERS = [
-  'Sayed (CEO)',
-  'Amit Kumar',
-  'Neha Sharma',
-  'Rizwan Khan',
-  'Priya Singh',
-  'Vikram Joshi',
-];
-
 export const ProjectModal: React.FC<ProjectModalProps> = ({
   isOpen,
   onClose,
@@ -70,13 +62,34 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
   projectToEdit,
 }) => {
   const { theme } = useTheme();
-  const { users, currentUser } = useAuth();
+  const { users, currentUser, currentRole, can } = useAuth();
   const currency = useSystemCurrency();
   const isLight = theme === 'white-sky';
-  const staffList = React.useMemo(
-    () => Array.from(new Set([...users.map((u) => u.name), ...MANAGERS])),
-    [users]
+  const isTeamManager = canManageProjectTeam(
+    currentRole?.id,
+    currentRole?.name,
+    currentUser?.jobTitle,
+    can('Projects', 'approve')
   );
+  const staffList = React.useMemo(() => {
+    if (isTeamManager) {
+      return Array.from(
+        new Set(users.filter((u) => u.status === 'Active').map((u) => u.name).filter(Boolean))
+      );
+    }
+    if (projectToEdit) {
+      return Array.from(
+        new Set(
+          [
+            projectToEdit.projectManager,
+            ...(projectToEdit.team || []),
+            currentUser?.name || '',
+          ].filter(Boolean)
+        )
+      );
+    }
+    return currentUser?.name ? [currentUser.name] : [];
+  }, [users, isTeamManager, projectToEdit, currentUser?.name]);
   const clientSuggestions = React.useMemo(() => getRealCrmClients(), [isOpen]);
 
   const getLocalIso = (offsetDays = 0) => {
@@ -87,7 +100,7 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
     ).padStart(2, '0')}`;
   };
 
-  const defaultManager = currentUser?.name || staffList[0] || MANAGERS[0];
+  const defaultManager = currentUser?.name || staffList[0] || '';
 
   const [name, setName] = useState('');
   const [client, setClient] = useState('');
@@ -482,22 +495,38 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
           {/* Project Manager & Team Allocation */}
           <div className="space-y-2">
             <div>
-              <label className="block font-semibold mb-1 text-slate-600 dark:text-slate-300">
-                Lead Project Manager
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-semibold text-slate-600 dark:text-slate-300">
+                  Lead Project Manager
+                </label>
+                {!isTeamManager && (
+                  <span className="text-[10px] font-semibold text-amber-500">
+                    Managed by Project Manager / Leader
+                  </span>
+                )}
+              </div>
               <div className="relative">
                 <User className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <select
-                  value={projectManager}
-                  onChange={(e) => setProjectManager(e.target.value)}
-                  className={`${inputClass} pl-9`}
-                >
-                  {staffList.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
+                {isTeamManager ? (
+                  <select
+                    value={projectManager}
+                    onChange={(e) => setProjectManager(e.target.value)}
+                    className={`${inputClass} pl-9`}
+                  >
+                    {staffList.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    readOnly
+                    value={projectManager}
+                    className={`${inputClass} pl-9 opacity-75 cursor-not-allowed`}
+                  />
+                )}
               </div>
             </div>
 
@@ -506,20 +535,21 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
                 Allocated Project Team
               </label>
               <div className="flex flex-wrap gap-2">
-                {staffList.map((member) => {
+                {(isTeamManager ? staffList : selectedTeam).map((member) => {
                   const isChecked = selectedTeam.includes(member);
                   return (
                     <button
                       key={member}
                       type="button"
-                      onClick={() => handleToggleTeamMember(member)}
+                      disabled={!isTeamManager}
+                      onClick={() => isTeamManager && handleToggleTeamMember(member)}
                       className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all flex items-center gap-1.5 ${
                         isChecked
                           ? 'bg-sky-500 text-white border-sky-500 shadow-2xs'
                           : isLight
                           ? 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
                           : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'
-                      }`}
+                      } ${!isTeamManager ? 'cursor-default opacity-90' : ''}`}
                     >
                       <span>{member}</span>
                       {isChecked && <CheckCircle2 className="w-3 h-3 text-white" />}

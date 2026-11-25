@@ -96,21 +96,26 @@ export const TimeEntryModal: React.FC<TimeEntryModalProps> = ({
       const matching = availableTasks.filter(
         (t) => t.project.toLowerCase() === defaultProj.toLowerCase()
       );
-      setTaskTitle(matching[0]?.title || availableTasks[0]?.title || 'OAuth2 Multi-Factor Authentication Flow');
-      setIsCustomTask(false);
+      setTaskTitle(matching[0]?.title || availableTasks[0]?.title || '');
+      setIsCustomTask(matching.length === 0 && availableTasks.length === 0);
       setCustomTaskInput('');
-      setUserName('Sayed (CEO)');
-      setDate('2025-05-20');
+      setUserName(availableMembers[0]?.name || '');
+      const now = new Date();
+      setDate(
+        `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+          now.getDate()
+        ).padStart(2, '0')}`
+      );
       setStartTime('09:00 AM');
       setEndTime('01:00 PM');
-      setDurationHours(4.0);
+      setDurationHours(1.0);
       setDescription('');
       setIsBillable(true);
-      setHourlyRate(200);
-      setStatus('Approved');
+      setHourlyRate(availableMembers[0]?.rate || 140);
+      setStatus('Pending');
       setTagsInput('');
     }
-  }, [entryToEdit, isOpen, availableProjects, availableTasks]);
+  }, [entryToEdit, isOpen, availableProjects, availableTasks, availableMembers]);
 
   if (!isOpen) return null;
 

@@ -103,3 +103,39 @@ export function getLinkedProjectOptions(extraCurrentValue?: string): string[] {
   }
   return Array.from(new Set(list));
 }
+
+/**
+ * Returns true only for Super Admin, Department Manager, or explicit Project Manager/Leader roles.
+ */
+export function canManageProjectTeam(
+  roleId?: string | null,
+  roleName?: string | null,
+  jobTitle?: string | null,
+  canApproveProjects?: boolean
+): boolean {
+  if (roleId === 'super-admin' || roleId === 'dept-manager' || canApproveProjects) return true;
+  const label = `${roleName || ''} ${jobTitle || ''}`.toLowerCase();
+  return /project\s*(manager|lead|leader)|team\s*lead|engineering\s*manager|director|head|ceo|admin/.test(
+    label
+  );
+}
+
+/**
+ * Returns ONLY staff names who work together with the signed-in user on the same assigned projects.
+ */
+export function getMyProjectTeammates(currentUserName?: string | null): string[] {
+  const names = new Set<string>();
+  if (currentUserName && currentUserName.trim()) {
+    names.add(currentUserName.trim());
+  }
+  const myProjects = getActualSavedProjects();
+  myProjects.forEach((p) => {
+    if (p.projectManager) names.add(p.projectManager.trim());
+    if (Array.isArray(p.team)) {
+      p.team.forEach((m) => {
+        if (m && m.trim()) names.add(m.trim());
+      });
+    }
+  });
+  return Array.from(names);
+}

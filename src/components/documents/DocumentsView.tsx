@@ -86,21 +86,31 @@ export const DocumentsView: React.FC = () => {
     return () => window.removeEventListener('ozostack-crm-config-changed', syncDocs);
   }, []);
 
-  // Scoped documents visible to the signed-in staff member
-  const visibleDocuments = useMemo(
-    () =>
-      scopeFilter(documents, (doc) => {
-        const proj = INITIAL_PROJECTS.find(
-          (p) =>
-            p.name === doc.project ||
-            (doc.project && p.name.toLowerCase().includes(doc.project.toLowerCase().split(' ')[0]))
-        );
-        return {
-          owner: [doc.uploadedBy, proj?.projectManager, ...(proj?.team || [])],
-        };
-      }),
-    [documents, scopeFilter]
-  );
+  // Scoped documents visible to the signed-in staff member (matched against REAL saved projects)
+  const visibleDocuments = useMemo(() => {
+    let realProjects: { name?: string; projectManager?: string; team?: string[] }[] = [];
+    try {
+      const raw = localStorage.getItem('ozostack_projects');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) realProjects = parsed;
+      }
+    } catch {
+      /* ignore */
+    }
+    const projPool = realProjects.length > 0 ? realProjects : INITIAL_PROJECTS;
+    return scopeFilter(documents, (doc) => {
+      const proj = projPool.find(
+        (p) =>
+          p.name &&
+          doc.project &&
+          p.name.trim().toLowerCase() === doc.project.trim().toLowerCase()
+      );
+      return {
+        owner: [doc.uploadedBy, proj?.projectManager, ...(proj?.team || [])],
+      };
+    });
+  }, [documents, scopeFilter]);
 
   // Selected Folder Filter: 'all' or folderId
   const [selectedFolderId, setSelectedFolderId] = useState<string>('all');

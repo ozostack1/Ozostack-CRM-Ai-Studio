@@ -103,7 +103,7 @@ export const Header: React.FC<HeaderProps> = ({
   onQuickCreate,
 }) => {
   const { theme, toggleTheme, toggleSidebar, setActiveNav } = useTheme();
-  const { currentUser, currentRole, logout } = useAuth();
+  const { currentUser, currentRole, logout, can } = useAuth();
   const { currency } = useSystemCurrency();
   const isLight = theme === 'white-sky';
 
@@ -632,6 +632,7 @@ export const Header: React.FC<HeaderProps> = ({
                 Quick Actions
               </div>
               <div className="py-1 space-y-0.5">
+                {can('Leads', 'create') && (
                 <button
                   onClick={() => {
                     setIsQuickCreateOpen(false);
@@ -642,7 +643,9 @@ export const Header: React.FC<HeaderProps> = ({
                   <UserPlus className="w-3.5 h-3.5 text-sky-500" />
                   <span className="font-medium">New Lead</span>
                 </button>
+                )}
 
+                {can('Deals', 'create') && (
                 <button
                   onClick={() => {
                     setIsQuickCreateOpen(false);
@@ -653,7 +656,9 @@ export const Header: React.FC<HeaderProps> = ({
                   <Briefcase className="w-3.5 h-3.5 text-emerald-500" />
                   <span className="font-medium">New Deal</span>
                 </button>
+                )}
 
+                {can('Projects', 'create') && (
                 <button
                   onClick={() => {
                     setIsQuickCreateOpen(false);
@@ -664,7 +669,9 @@ export const Header: React.FC<HeaderProps> = ({
                   <FolderKanban className="w-3.5 h-3.5 text-amber-500" />
                   <span className="font-medium">New Project</span>
                 </button>
+                )}
 
+                {can('Tasks', 'create') && (
                 <button
                   onClick={() => {
                     setIsQuickCreateOpen(false);
@@ -675,7 +682,9 @@ export const Header: React.FC<HeaderProps> = ({
                   <CheckSquare className="w-3.5 h-3.5 text-sky-400" />
                   <span className="font-medium">New Task</span>
                 </button>
+                )}
 
+                {can('Events & Calendar', 'create') && (
                 <button
                   onClick={() => {
                     setIsQuickCreateOpen(false);
@@ -686,7 +695,9 @@ export const Header: React.FC<HeaderProps> = ({
                   <CalendarDays className="w-3.5 h-3.5 text-purple-400" />
                   <span className="font-medium">Schedule Event</span>
                 </button>
+                )}
 
+                {can('Time Tracking', 'create') && (
                 <button
                   onClick={() => {
                     setIsQuickCreateOpen(false);
@@ -697,7 +708,10 @@ export const Header: React.FC<HeaderProps> = ({
                   <Clock className="w-3.5 h-3.5 text-indigo-400" />
                   <span className="font-medium">Log Time</span>
                 </button>
+                )}
 
+                {can('To Do & Notes', 'create') && (
+                <>
                 <button
                   onClick={() => {
                     setIsQuickCreateOpen(false);
@@ -719,7 +733,10 @@ export const Header: React.FC<HeaderProps> = ({
                   <StickyNote className="w-3.5 h-3.5 text-purple-400" />
                   <span className="font-medium">Personal Note</span>
                 </button>
+                </>
+                )}
 
+                {can('Documents', 'create') && (
                 <button
                   onClick={() => {
                     setIsQuickCreateOpen(false);
@@ -730,6 +747,7 @@ export const Header: React.FC<HeaderProps> = ({
                   <FileText className="w-3.5 h-3.5 text-teal-400" />
                   <span className="font-medium">Upload Vault File</span>
                 </button>
+                )}
               </div>
             </div>
           )}

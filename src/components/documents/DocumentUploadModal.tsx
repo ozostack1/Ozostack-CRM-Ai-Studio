@@ -14,6 +14,7 @@ import {
   Tag,
 } from 'lucide-react';
 import { DocumentItem, DocumentFileType, DocumentFolder } from '../../types/crm';
+import { getMyProjectTeammates } from '../../data/projectDirectory';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 
@@ -366,13 +367,12 @@ export const DocumentUploadModal: React.FC<DocumentUploadModalProps> = ({
                 }`}
               />
               <datalist id="vault-staff-owners">
-                {users.map((u) => (
-                  <option key={u.id} value={u.name} />
+                {(currentUser?.roleId === 'super-admin'
+                  ? users.filter((u) => u.status === 'Active').map((u) => u.name)
+                  : Array.from(new Set([currentUser?.name || '', ...getMyProjectTeammates(currentUser?.name)].filter(Boolean)))
+                ).map((name) => (
+                  <option key={name} value={name} />
                 ))}
-                <option value="Engineering Team" />
-                <option value="Finance Team" />
-                <option value="HR Team" />
-                <option value="Marketing Team" />
               </datalist>
             </div>
           </div>

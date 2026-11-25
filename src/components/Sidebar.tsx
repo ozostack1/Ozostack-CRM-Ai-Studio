@@ -225,10 +225,15 @@ export const Sidebar: React.FC = () => {
       'Events & Calendar': scopeFilter(cal, (e) => ({ owner: [e.owner, ...(e.attendees || [])] })).length,
       'To Do & Notes': pendingPersonalTodosCount,
       Documents: scopeFilter(docs, (doc) => {
-        const proj = INITIAL_PROJECTS.find(
+        const savedProjects = readLS<{ name?: string; projectManager?: string; team?: string[] }>(
+          'ozostack_projects',
+          INITIAL_PROJECTS
+        );
+        const proj = savedProjects.find(
           (p) =>
-            p.name === doc.project ||
-            (doc.project && p.name.toLowerCase().includes(doc.project.toLowerCase().split(' ')[0]))
+            p.name &&
+            doc.project &&
+            p.name.trim().toLowerCase() === doc.project.trim().toLowerCase()
         );
         return { owner: [doc.uploadedBy, proj?.projectManager, ...(proj?.team || [])] };
       }).length,
