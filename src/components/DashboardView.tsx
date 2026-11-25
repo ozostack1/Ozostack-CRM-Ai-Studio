@@ -420,6 +420,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           onSaveDefaultDesign={handleSaveDefaultDesign}
           onQuickCreate={onQuickCreate}
           onNotify={showToast}
+          isWidgetPickerOpenExternal={isAddWidgetOpenExternal}
+          onCloseWidgetPickerExternal={onCloseAddWidgetExternal}
         />
         {toastMessage && (
           <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-3 rounded-xl bg-slate-900 text-white dark:bg-sky-500 dark:text-slate-950 font-medium text-xs shadow-xl animate-fade-in border border-slate-700 dark:border-sky-400">
