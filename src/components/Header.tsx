@@ -320,7 +320,7 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <header
       ref={headerRef}
-      className={`sticky top-0 z-30 flex items-center justify-between px-4 sm:px-6 py-3 border-b transition-colors ${
+      className={`sticky top-0 z-40 flex items-center justify-between px-4 sm:px-6 py-3 border-b transition-colors ${
         isLight
           ? 'bg-white/90 backdrop-blur-md border-sky-100 text-slate-800'
           : 'bg-[#0a0f1d]/90 backdrop-blur-md border-slate-800/80 text-white'

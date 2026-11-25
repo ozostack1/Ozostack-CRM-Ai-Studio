@@ -154,9 +154,11 @@ export const MetricCards: React.FC = () => {
     const sync = () => setLiveData(readLiveStorage());
     window.addEventListener('storage', sync);
     window.addEventListener('ozostack-crm-config-changed', sync);
+    window.addEventListener('ozostack-finance-changed', sync);
     return () => {
       window.removeEventListener('storage', sync);
       window.removeEventListener('ozostack-crm-config-changed', sync);
+      window.removeEventListener('ozostack-finance-changed', sync);
     };
   }, []);
 

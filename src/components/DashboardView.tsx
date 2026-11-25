@@ -436,11 +436,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   return (
     <div className="space-y-3.5">
       {isDesignDropdownOpen && (
-        <div className="fixed inset-0 z-40" onClick={() => setIsDesignDropdownOpen(false)} />
+        <div className="fixed inset-0 z-10" onClick={() => setIsDesignDropdownOpen(false)} />
       )}
       {/* 1. TOP MULTI-DASHBOARD MANAGEMENT BAR */}
       <div
-        className={`relative z-50 flex flex-col md:flex-row md:items-center justify-between gap-3 p-3 rounded-2xl border transition-colors ${
+        className={`relative z-20 flex flex-col md:flex-row md:items-center justify-between gap-3 p-3 rounded-2xl border transition-colors ${
           isLight
             ? 'bg-white border-sky-100 shadow-xs'
             : 'bg-[#0f172a]/90 border-slate-800/80 shadow-md'

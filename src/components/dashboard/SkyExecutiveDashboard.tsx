@@ -1197,9 +1197,9 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+            <div className="flex gap-2.5 overflow-x-auto pb-1">
               {leadsKanbanColumns.map((col) => (
-                <div key={col.title} className={`rounded-xl border p-2 flex flex-col ${col.colBg}`}>
+                <div key={col.title} className={`rounded-xl border p-2 flex flex-col min-w-[165px] flex-1 ${col.colBg}`}>
                   <div className={`px-2 py-1 rounded-lg text-[11px] font-extrabold flex items-center justify-between mb-2 ${col.headerBg}`}>
                     <span className="truncate">{col.title}</span>
                     <span className="opacity-80">({col.items.length})</span>
@@ -1367,9 +1367,9 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+            <div className="flex gap-2.5 overflow-x-auto pb-1">
               {tasksKanbanColumns.map((col) => (
-                <div key={col.key} className={`rounded-xl border p-2.5 ${col.colBg}`}>
+                <div key={col.key} className={`rounded-xl border p-2.5 min-w-[155px] flex-1 ${col.colBg}`}>
                   <div className={`text-xs font-extrabold flex items-center justify-between mb-2 ${col.badge}`}>
                     <span>{col.title}</span>
                     <span className="text-[10px] opacity-75">({col.items.length})</span>
@@ -1911,7 +1911,7 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
     <div className="space-y-4">
       {(designMenuOpen || quickCreateOpen) && (
         <div
-          className="fixed inset-0 z-30"
+          className="fixed inset-0 z-[25]"
           onClick={() => {
             setDesignMenuOpen(false);
             setQuickCreateOpen(false);
@@ -1921,7 +1921,9 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
 
       {/* 1. SCENIC SKY HERO BANNER + DESIGN SWITCHER + EDIT + WIDGETS + QUICK CREATE */}
       <div
-        className={`relative rounded-2xl border overflow-visible ${
+        className={`relative ${
+          designMenuOpen || quickCreateOpen ? 'z-30' : 'z-0'
+        } rounded-2xl border overflow-visible ${
           isLight
             ? 'border-sky-200/80 bg-gradient-to-br from-sky-100 via-blue-50 to-indigo-50/70'
             : 'border-slate-800 bg-gradient-to-br from-[#0c1d3d] via-[#0f172a] to-[#13203d]'
@@ -1948,7 +1950,7 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
         </svg>
 
         <div
-          className={`relative z-40 px-4 sm:px-6 pt-5 ${
+          className={`relative z-10 px-4 sm:px-6 pt-5 ${
             firstItemIsHeroKpi ? 'pb-14' : 'pb-5'
           } flex flex-col xl:flex-row xl:items-center justify-between gap-4`}
         >
