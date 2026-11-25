@@ -17,16 +17,17 @@ import {
   Banknote,
   TrendingUp,
   ChevronRight,
+  ChevronDown,
+  Star,
+  Check,
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
+import { useAuth } from '../context/AuthContext';
 import { useSystemCurrency } from '../data/currencyService';
 import { DashboardConfig, INITIAL_DASHBOARDS, AVAILABLE_WIDGETS } from '../types/dashboard';
 import {
   INITIAL_PROJECTS,
   INITIAL_TASKS,
-  INITIAL_DETAILED_INVOICES,
-  INITIAL_EXPENSES,
-  INITIAL_PAYMENTS,
 } from '../data/mockData';
 import { MetricCards } from './MetricCards';
 import { ChartsSection } from './ChartsSection';
@@ -35,11 +36,18 @@ import { TablesSection } from './TablesSection';
 import { BottomKpiStrip } from './BottomKpiStrip';
 import { CreateDashboardModal } from './dashboard/CreateDashboardModal';
 import { AddWidgetModal } from './AddWidgetModal';
+import {
+  SkyExecutiveDashboard,
+  DashboardDesignId,
+} from './dashboard/SkyExecutiveDashboard';
 
 interface DashboardViewProps {
   onOpenAddWidget?: () => void;
   isAddWidgetOpenExternal?: boolean;
   onCloseAddWidgetExternal?: () => void;
+  onQuickCreate?: (
+    type: 'lead' | 'deal' | 'project' | 'task' | 'event' | 'time' | 'document' | 'todo' | 'note'
+  ) => void;
 }
 
 const STORAGE_KEY = 'ozostack_custom_dashboards';
@@ -49,10 +57,50 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenAddWidget,
   isAddWidgetOpenExternal = false,
   onCloseAddWidgetExternal,
+  onQuickCreate,
 }) => {
   const { theme, setActiveNav } = useTheme();
+  const { currentUser } = useAuth();
   const isLight = theme === 'white-sky';
   const { currency } = useSystemCurrency();
+
+  // Per-user Dashboard Design Style ('sky-executive' | 'classic') + Saved Default
+  const defaultStyleKey = `ozostack_dashboard_default_style_v1_${currentUser?.id || 'global'}`;
+  const readSavedDefaultStyle = (key: string): DashboardDesignId => {
+    try {
+      const saved = localStorage.getItem(key);
+      if (saved === 'classic' || saved === 'sky-executive') return saved;
+    } catch {
+      /* ignore */
+    }
+    return 'sky-executive';
+  };
+
+  const [defaultDesign, setDefaultDesign] = useState<DashboardDesignId>(() =>
+    readSavedDefaultStyle(defaultStyleKey)
+  );
+  const [activeDesign, setActiveDesign] = useState<DashboardDesignId>(() =>
+    readSavedDefaultStyle(defaultStyleKey)
+  );
+  const [isDesignDropdownOpen, setIsDesignDropdownOpen] = useState(false);
+
+  useEffect(() => {
+    const saved = readSavedDefaultStyle(defaultStyleKey);
+    setDefaultDesign(saved);
+    setActiveDesign(saved);
+  }, [defaultStyleKey]);
+
+  const handleSaveDefaultDesign = (designId: DashboardDesignId) => {
+    try {
+      localStorage.setItem(defaultStyleKey, designId);
+    } catch {
+      /* ignore */
+    }
+    setDefaultDesign(designId);
+    showToast(
+      `Saved "${designId === 'sky-executive' ? 'Sky Executive' : 'Classic Command'}" as your default dashboard.`
+    );
+  };
 
   // Multi-Dashboard State with localStorage persistence
   const [dashboards, setDashboards] = useState<DashboardConfig[]>(() => {
@@ -129,9 +177,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
     const projectsList = parse('ozostack_projects') ?? INITIAL_PROJECTS;
     const tasksList = parse('ozostack_tasks_v2') ?? INITIAL_TASKS;
-    const invoicesList = parse('ozostack_invoices_v1') ?? INITIAL_DETAILED_INVOICES;
-    const expensesList = parse('ozostack_expenses_v1') ?? parse('ozostack_expenses') ?? INITIAL_EXPENSES;
-    const paymentsList = parse('ozostack_payments_v1') ?? parse('ozostack_payments') ?? INITIAL_PAYMENTS;
+    const invoicesList = parse('ozostack_invoices') ?? [];
+    const expensesList = parse('ozostack_expenses') ?? [];
+    const paymentsList = parse('ozostack_payments') ?? [];
+    const revenueList = parse('ozostack_revenue_transactions') ?? [];
 
     return {
       projects: projectsList,
@@ -139,6 +188,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       invoices: invoicesList,
       expenses: expensesList,
       payments: paymentsList,
+      revenue: revenueList,
     };
   };
 
@@ -148,15 +198,20 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     const sync = () => setExecData(readExecutiveData());
     window.addEventListener('storage', sync);
     window.addEventListener('ozostack-crm-config-changed', sync);
+    window.addEventListener('ozostack-finance-changed', sync);
     window.addEventListener('focus', sync);
     return () => {
       window.removeEventListener('storage', sync);
       window.removeEventListener('ozostack-crm-config-changed', sync);
+      window.removeEventListener('ozostack-finance-changed', sync);
       window.removeEventListener('focus', sync);
     };
   }, []);
 
   const execSummaries = useMemo(() => {
+    const num = (v: unknown) =>
+      typeof v === 'number' ? v : parseFloat(String(v || 0).replace(/[^0-9.-]/g, '')) || 0;
+
     // Projects
     const activeProjects = execData.projects.filter(
       (p: any) => (p.status || '').toLowerCase().includes('progress') || (p.status || '').toLowerCase().includes('active')
@@ -171,35 +226,48 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     const doneTasks = execData.tasks.filter((t: any) => t.status === 'Completed').length;
     const tasksSummary = `${dueTasks} Due · ${doneTasks} Done`;
 
-    // Invoices
+    // Invoices (real Finance data)
     const totalInvoiced = execData.invoices.reduce((sum: number, inv: any) => {
-      const val = typeof inv.amount === 'number' ? inv.amount : parseFloat(String(inv.amount || 0).replace(/[^0-9.]/g, '')) || 0;
-      return sum + val;
+      return sum + num(inv.totalAmount ?? inv.amountNumeric ?? inv.amount);
     }, 0);
     const paidInvoiced = execData.invoices
       .filter((inv: any) => inv.status === 'Paid')
       .reduce((sum: number, inv: any) => {
-        const val = typeof inv.amount === 'number' ? inv.amount : parseFloat(String(inv.amount || 0).replace(/[^0-9.]/g, '')) || 0;
-        return sum + val;
+        return sum + num(inv.totalAmount ?? inv.amountNumeric ?? inv.amount);
       }, 0);
     const paidPct = totalInvoiced > 0 ? Math.round((paidInvoiced / totalInvoiced) * 100) : 0;
     const formattedTotalInv = totalInvoiced >= 1000 ? `${(totalInvoiced / 1000).toFixed(1)}K` : totalInvoiced.toLocaleString();
-    const invoicesSummary = `${currency.symbol}${formattedTotalInv} · ${paidPct}% Paid`;
+    const invoicesSummary =
+      execData.invoices.length === 0
+        ? '0 Invoices'
+        : `${currency.symbol}${formattedTotalInv} · ${paidPct}% Paid`;
 
     // Expenses
-    const totalExpenses = execData.expenses.reduce((sum: number, exp: any) => {
-      const val = typeof exp.amount === 'number' ? exp.amount : parseFloat(String(exp.amount || 0).replace(/[^0-9.]/g, '')) || 0;
-      return sum + val;
-    }, 0);
+    const totalExpenses = execData.expenses.reduce((sum: number, exp: any) => sum + num(exp.amount), 0);
     const expensesSummary = `${currency.symbol}${Math.round(totalExpenses).toLocaleString()} Tracked`;
 
     // Payments
     const paymentsCount = execData.payments.length;
-    const paymentsSummary = paymentsCount === 0 ? '0 Settled · Gateways Ready' : 'Stripe · Wire · PayPal';
+    const paymentsSummary =
+      paymentsCount === 0 ? '0 Settled · Gateways Ready' : `${paymentsCount} Settled`;
 
-    // P&L
-    const netProfit = totalInvoiced - totalExpenses;
-    const grossMargin = totalInvoiced > 0 ? ((netProfit / totalInvoiced) * 100).toFixed(1) + '%' : '0.0%';
+    // Revenue + P&L (deduplicated revenue + paid invoices)
+    const loggedInvs = new Set(
+      (execData.revenue || [])
+        .filter((r: any) => r.status !== 'Refunded')
+        .map((r: any) => r.invoiceNumber)
+        .filter(Boolean)
+    );
+    const totalRevenue =
+      (execData.revenue || [])
+        .filter((r: any) => r.status !== 'Refunded')
+        .reduce((s: number, r: any) => s + num(r.amount), 0) +
+      execData.invoices
+        .filter((inv: any) => inv.status === 'Paid' && !loggedInvs.has(inv.invoiceNumber))
+        .reduce((s: number, inv: any) => s + num(inv.totalAmount ?? inv.amountNumeric ?? inv.amount), 0);
+
+    const netProfit = totalRevenue - totalExpenses;
+    const grossMargin = totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(1) + '%' : '0.0%';
     const pnlSummary = `${currency.symbol}${Math.round(netProfit).toLocaleString()} Net · ${grossMargin}`;
 
     return {
@@ -342,18 +410,121 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     if (onCloseAddWidgetExternal) onCloseAddWidgetExternal();
   };
 
+  if (activeDesign === 'sky-executive') {
+    return (
+      <>
+        <SkyExecutiveDashboard
+          design={activeDesign}
+          defaultDesign={defaultDesign}
+          onChangeDesign={(d) => setActiveDesign(d)}
+          onSaveDefaultDesign={handleSaveDefaultDesign}
+          onQuickCreate={onQuickCreate}
+          onNotify={showToast}
+        />
+        {toastMessage && (
+          <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-3 rounded-xl bg-slate-900 text-white dark:bg-sky-500 dark:text-slate-950 font-medium text-xs shadow-xl animate-fade-in border border-slate-700 dark:border-sky-400">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 dark:text-slate-950" />
+            <span>{toastMessage}</span>
+          </div>
+        )}
+      </>
+    );
+  }
+
   return (
     <div className="space-y-3.5">
+      {isDesignDropdownOpen && (
+        <div className="fixed inset-0 z-40" onClick={() => setIsDesignDropdownOpen(false)} />
+      )}
       {/* 1. TOP MULTI-DASHBOARD MANAGEMENT BAR */}
       <div
-        className={`flex flex-col md:flex-row md:items-center justify-between gap-3 p-3 rounded-2xl border transition-colors ${
+        className={`relative z-50 flex flex-col md:flex-row md:items-center justify-between gap-3 p-3 rounded-2xl border transition-colors ${
           isLight
             ? 'bg-white border-sky-100 shadow-xs'
             : 'bg-[#0f172a]/90 border-slate-800/80 shadow-md'
         }`}
       >
-        {/* Left: Dashboard Tabs */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
+        {/* Left: Design Switcher (outside overflow container so dropdown never clips) + Dashboard Tabs */}
+        <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap md:flex-nowrap">
+          {/* Design Switcher Dropdown (Classic <-> Sky Executive) */}
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              onClick={() => setIsDesignDropdownOpen((v) => !v)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                isLight
+                  ? 'bg-sky-50 border-sky-200 text-sky-700 hover:bg-sky-100'
+                  : 'bg-slate-800 border-slate-700 text-sky-300 hover:border-sky-500'
+              }`}
+              title="Switch Dashboard Design"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-sky-500" />
+              <span>Design: Classic</span>
+              <ChevronDown className="w-3.5 h-3.5 opacity-70" />
+            </button>
+
+            {isDesignDropdownOpen && (
+              <div
+                className={`absolute left-0 mt-1.5 w-60 rounded-2xl border shadow-xl z-50 p-1.5 ${
+                  isLight ? 'bg-white border-sky-100' : 'bg-[#0f172a] border-slate-700'
+                }`}
+              >
+                <div className="px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+                  Switch Dashboard Design
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveDesign('sky-executive');
+                    setIsDesignDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-bold hover:bg-sky-50 dark:hover:bg-slate-800 transition-colors"
+                >
+                  <div className="text-left">
+                    <div>Sky Executive</div>
+                    <div className="text-[10px] font-normal text-slate-400">
+                      Colourful charts, funnel & kanban
+                    </div>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveDesign('classic');
+                    setIsDesignDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-bold bg-sky-500/15 text-sky-600 dark:text-sky-400 mt-0.5"
+                >
+                  <div className="text-left">
+                    <div>Classic Command</div>
+                    <div className="text-[10px] font-normal text-slate-400">
+                      Multi-board drag & drop widgets
+                    </div>
+                  </div>
+                  <Check className="w-4 h-4 shrink-0" />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Save Classic as Default */}
+          <button
+            type="button"
+            onClick={() => handleSaveDefaultDesign('classic')}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border shrink-0 transition-all ${
+              defaultDesign === 'classic'
+                ? 'bg-emerald-500/15 border-emerald-400/50 text-emerald-700 dark:text-emerald-300'
+                : isLight
+                ? 'bg-white border-slate-200 text-slate-600 hover:border-amber-400 hover:text-amber-600'
+                : 'bg-slate-900 border-slate-700 text-slate-300 hover:border-amber-500'
+            }`}
+            title="Save Classic Command as your default dashboard"
+          >
+            <Star className={`w-3 h-3 ${defaultDesign === 'classic' ? 'fill-current' : ''}`} />
+            <span>{defaultDesign === 'classic' ? 'Default' : 'Set Default'}</span>
+          </button>
+
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none min-w-0">
           {dashboards.map((dash) => {
             const isActive = dash.id === activeDashboard.id;
 
@@ -389,6 +560,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </button>
             );
           })}
+          </div>
         </div>
 
         {/* Right: Actions (Add Widget, New Dashboard, Delete, Drag Hint) */}

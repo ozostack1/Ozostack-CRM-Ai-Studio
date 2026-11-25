@@ -216,6 +216,7 @@ function DashboardContent() {
             <DashboardView
               isAddWidgetOpenExternal={isAddWidgetOpen}
               onCloseAddWidgetExternal={() => setIsAddWidgetOpen(false)}
+              onQuickCreate={handleQuickCreate}
             />
           ) : (
             <SubViews viewName={activeNav} />

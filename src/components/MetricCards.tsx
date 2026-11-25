@@ -101,22 +101,54 @@ export const MetricCards: React.FC = () => {
       projects: readKey('ozostack_projects'),
       contacts: readKey('ozostack_contacts_v1'),
       followUps: readKey('ozostack_followups_v2'),
-      invoices: readKey('ozostack_invoices_v1'),
+      invoices: readKey('ozostack_invoices') ?? readKey('ozostack_invoices_v1'),
+      revenueTxns: readKey('ozostack_revenue_transactions'),
+      expenses: readKey('ozostack_expenses'),
       team: readKey('ozostack_team_members_v1'),
     };
   };
 
   const [liveData, setLiveData] = useState(readLiveStorage);
 
-  const isRevWiped = liveData.invoices !== null && liveData.invoices.length === 0;
+  const parseNum = (v: unknown) =>
+    typeof v === 'number' ? v : parseFloat(String(v || 0).replace(/[^0-9.-]/g, '')) || 0;
+
+  const hasLiveFinance =
+    liveData.invoices !== null || liveData.revenueTxns !== null || liveData.expenses !== null;
+  const computedLiveRev = useMemo(() => {
+    const revTxns = (liveData.revenueTxns || []).filter((r: any) => r.status !== 'Refunded');
+    const loggedInvs = new Set(revTxns.map((r: any) => r.invoiceNumber).filter(Boolean));
+    const paidInvs = (liveData.invoices || []).filter(
+      (i: any) => i.status === 'Paid' && !loggedInvs.has(i.invoiceNumber)
+    );
+    return (
+      revTxns.reduce((s: number, r: any) => s + parseNum(r.amount), 0) +
+      paidInvs.reduce((s: number, i: any) => s + parseNum(i.totalAmount ?? i.amountNumeric ?? i.amount), 0)
+    );
+  }, [liveData.revenueTxns, liveData.invoices]);
+
+  const computedLiveExpenses = useMemo(
+    () => (liveData.expenses || []).reduce((s: number, e: any) => s + parseNum(e.amount), 0),
+    [liveData.expenses]
+  );
+
+  const isRevWiped = hasLiveFinance && computedLiveRev === 0;
   const isDataWiped = isRevWiped || (liveData.deals !== null && liveData.deals.length === 0 && liveData.leads !== null && liveData.leads.length === 0);
-  const revAmount = isRevWiped ? 0 : 215420;
-  const todayAmount = isRevWiped ? 0 : 7540;
-  const mrrAmount = isRevWiped ? 0 : 68450;
-  const profitAmount = isRevWiped ? 0 : 47850;
-  const cashAmount = isRevWiped ? 0 : 32650;
-  const grossMarginVal = isRevWiped ? '0.0%' : '42.6%';
-  const activeClientsVal = liveData.contacts ? liveData.contacts.length : (isDataWiped ? 0 : 63);
+  const revAmount = hasLiveFinance ? computedLiveRev : 0;
+  const todayAmount = hasLiveFinance
+    ? (liveData.revenueTxns || [])
+        .filter((r: any) => r.date === new Date().toISOString().split('T')[0])
+        .reduce((s: number, r: any) => s + parseNum(r.amount), 0)
+    : 0;
+  const mrrAmount = hasLiveFinance
+    ? (liveData.revenueTxns || [])
+        .filter((r: any) => r.isRecurring)
+        .reduce((s: number, r: any) => s + parseNum(r.amount), 0)
+    : 0;
+  const profitAmount = revAmount - computedLiveExpenses;
+  const cashAmount = Math.max(0, profitAmount);
+  const grossMarginVal = revAmount > 0 ? `${((profitAmount / revAmount) * 100).toFixed(1)}%` : '0.0%';
+  const activeClientsVal = liveData.contacts ? liveData.contacts.length : (isDataWiped ? 0 : 0);
 
   useEffect(() => {
     const sync = () => setLiveData(readLiveStorage());
