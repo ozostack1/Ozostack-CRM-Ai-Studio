@@ -60,9 +60,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onQuickCreate,
 }) => {
   const { theme, setActiveNav } = useTheme();
-  const { currentUser } = useAuth();
+  const { currentUser, currentRole } = useAuth();
   const isLight = theme === 'white-sky';
   const { currency } = useSystemCurrency();
+  const isSuperAdmin = currentRole?.id === 'super-admin';
 
   // Per-user Dashboard Design Style ('sky-executive' | 'classic') + Saved Default
   const defaultStyleKey = `ozostack_dashboard_default_style_v1_${currentUser?.id || 'global'}`;
@@ -410,7 +411,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     if (onCloseAddWidgetExternal) onCloseAddWidgetExternal();
   };
 
-  if (activeDesign === 'sky-executive') {
+  // Non-Super-Admin staff always render the strictly permission-gated Role Dashboard
+  if (!isSuperAdmin || activeDesign === 'sky-executive') {
     return (
       <>
         <SkyExecutiveDashboard

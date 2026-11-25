@@ -209,6 +209,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!currentUser || !currentRole) return false;
       const key = MODULE_ALIASES[module] || module;
       if (key === 'To Do & Notes') return true;
+      if (
+        key === 'Dashboard' &&
+        action === 'view' &&
+        !Object.prototype.hasOwnProperty.call(currentRole.permissions, 'Dashboard')
+      ) {
+        return true;
+      }
       if (isSuperAdmin) {
         if (key === 'Settings') return true;
         if (Object.prototype.hasOwnProperty.call(currentRole.permissions, key)) {

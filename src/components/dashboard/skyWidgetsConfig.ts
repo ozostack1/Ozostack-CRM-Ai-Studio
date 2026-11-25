@@ -26,6 +26,8 @@ export interface SkyWidgetMeta {
   category: SkyWidgetCategory;
   defaultSpan: SkyWidgetSpan;
   defaultEnabled: boolean;
+  /** User must have view permission for at least ONE listed module; omit if always allowed */
+  requiredModules?: string[];
 }
 
 export interface SkyLayoutItem {
@@ -36,8 +38,8 @@ export interface SkyLayoutItem {
 export const SKY_WIDGET_CATALOG: SkyWidgetMeta[] = [
   {
     id: 'hero-kpis',
-    title: '5 Hero KPI Cards',
-    description: 'Leads, Sales Revenue, Active Projects, Pending Tasks & Conversion Rate with sparklines',
+    title: 'Hero KPI Cards',
+    description: 'Role-scoped top metrics (only shows KPIs for modules your role can access)',
     category: 'Overview',
     defaultSpan: 12,
     defaultEnabled: true,
@@ -49,6 +51,7 @@ export const SKY_WIDGET_CATALOG: SkyWidgetMeta[] = [
     category: 'Finance',
     defaultSpan: 5,
     defaultEnabled: true,
+    requiredModules: ['Revenue', 'Profit & Loss'],
   },
   {
     id: 'sales-pipeline',
@@ -57,6 +60,7 @@ export const SKY_WIDGET_CATALOG: SkyWidgetMeta[] = [
     category: 'Sales & CRM',
     defaultSpan: 4,
     defaultEnabled: true,
+    requiredModules: ['Leads', 'Deals', 'Pipeline'],
   },
   {
     id: 'lead-sources',
@@ -65,19 +69,21 @@ export const SKY_WIDGET_CATALOG: SkyWidgetMeta[] = [
     category: 'Sales & CRM',
     defaultSpan: 3,
     defaultEnabled: true,
+    requiredModules: ['Leads'],
   },
   {
     id: 'leads-kanban',
     title: 'Leads Kanban Board',
-    description: '5-column live leads board with 1-click Call, WhatsApp & Email actions',
+    description: 'Live leads board grouped by all stages with Call, WhatsApp & Email actions',
     category: 'Sales & CRM',
     defaultSpan: 8,
     defaultEnabled: true,
+    requiredModules: ['Leads'],
   },
   {
     id: 'ai-assistant',
     title: 'AI Business Assistant',
-    description: 'Live Gemini AI chat analyzing your real leads, deals, tasks & revenue',
+    description: 'Live AI helper analyzing only the modules & records your role is permitted to view',
     category: 'AI & Personal',
     defaultSpan: 4,
     defaultEnabled: true,
@@ -85,10 +91,11 @@ export const SKY_WIDGET_CATALOG: SkyWidgetMeta[] = [
   {
     id: 'tasks-kanban',
     title: 'Tasks Kanban Board',
-    description: '4-column live tasks board with 1-click completion checkboxes',
+    description: 'Interactive tasks board with 1-click completion checkboxes & attachment badges',
     category: 'Operations',
     defaultSpan: 7,
     defaultEnabled: true,
+    requiredModules: ['Tasks'],
   },
   {
     id: 'financial-overview',
@@ -97,19 +104,21 @@ export const SKY_WIDGET_CATALOG: SkyWidgetMeta[] = [
     category: 'Finance',
     defaultSpan: 5,
     defaultEnabled: true,
+    requiredModules: ['Revenue', 'Expenses', 'Profit & Loss'],
   },
   {
     id: 'upcoming-schedule',
     title: 'Upcoming Meetings & Follow-Ups',
-    description: 'Unified schedule of upcoming Calendar meetings & CRM follow-ups',
+    description: 'Unified schedule of your upcoming Calendar meetings & CRM follow-ups',
     category: 'Sales & CRM',
     defaultSpan: 6,
     defaultEnabled: true,
+    requiredModules: ['Events & Calendar', 'Follow Ups'],
   },
   {
     id: 'recent-activities',
-    title: 'Recent CRM Activities',
-    description: 'Live feed of recent leads, invoices, payments & completed tasks',
+    title: 'Recent Activities',
+    description: 'Live feed of recent updates across only your permitted CRM modules',
     category: 'Overview',
     defaultSpan: 6,
     defaultEnabled: true,
@@ -117,7 +126,7 @@ export const SKY_WIDGET_CATALOG: SkyWidgetMeta[] = [
   {
     id: 'key-performance',
     title: 'Key Performance Switcher',
-    description: 'Tabbed KPI strip (Sales / Finance / Projects / Tasks) with mini trend waves',
+    description: 'Tabbed KPI strip filtered to your allowed modules',
     category: 'Overview',
     defaultSpan: 6,
     defaultEnabled: false,
@@ -125,7 +134,7 @@ export const SKY_WIDGET_CATALOG: SkyWidgetMeta[] = [
   {
     id: 'connected-modules',
     title: 'Quick Module Shortcuts',
-    description: '1-click jump cards to Projects, Tasks, Invoices, Expenses, Payments & P&L',
+    description: '1-click jump cards to your permitted workspace modules',
     category: 'Overview',
     defaultSpan: 12,
     defaultEnabled: false,
@@ -133,10 +142,11 @@ export const SKY_WIDGET_CATALOG: SkyWidgetMeta[] = [
   {
     id: 'projects-progress',
     title: 'Active Projects Tracker',
-    description: 'Live project completion progress bars, client names & health status',
+    description: 'Live project completion progress bars, client names & deadlines',
     category: 'Operations',
     defaultSpan: 6,
     defaultEnabled: false,
+    requiredModules: ['Projects'],
   },
   {
     id: 'invoices-snapshot',
@@ -145,6 +155,7 @@ export const SKY_WIDGET_CATALOG: SkyWidgetMeta[] = [
     category: 'Finance',
     defaultSpan: 6,
     defaultEnabled: false,
+    requiredModules: ['Invoices'],
   },
   {
     id: 'daily-planner-card',
@@ -157,10 +168,11 @@ export const SKY_WIDGET_CATALOG: SkyWidgetMeta[] = [
   {
     id: 'team-workload',
     title: 'Team Workload & Performance',
-    description: 'Live leads & task completion rate per team member',
+    description: 'Live leads & task completion rate across team members',
     category: 'Operations',
     defaultSpan: 6,
     defaultEnabled: false,
+    requiredModules: ['Team'],
   },
 ];
 
@@ -171,11 +183,82 @@ export const DEFAULT_SKY_LAYOUT: SkyLayoutItem[] = SKY_WIDGET_CATALOG.filter(
 const VALID_IDS = new Set<string>(SKY_WIDGET_CATALOG.map((w) => w.id));
 const VALID_SPANS = new Set<number>([3, 4, 5, 6, 7, 8, 12]);
 
+export function isWidgetPermitted(
+  widgetId: SkyWidgetId,
+  can: (module: string) => boolean
+): boolean {
+  const meta = SKY_WIDGET_CATALOG.find((w) => w.id === widgetId);
+  if (!meta) return false;
+  if (!meta.requiredModules || meta.requiredModules.length === 0) return true;
+  return meta.requiredModules.some((mod) => can(mod));
+}
+
+export function getDefaultLayoutForRole(
+  roleId: string | undefined,
+  can: (module: string) => boolean
+): SkyLayoutItem[] {
+  let preset: SkyLayoutItem[];
+
+  if (roleId === 'super-admin') {
+    preset = [...DEFAULT_SKY_LAYOUT];
+  } else if (roleId === 'finance-manager') {
+    preset = [
+      { id: 'hero-kpis', span: 12 },
+      { id: 'revenue-overview', span: 7 },
+      { id: 'financial-overview', span: 5 },
+      { id: 'invoices-snapshot', span: 6 },
+      { id: 'tasks-kanban', span: 6 },
+      { id: 'projects-progress', span: 6 },
+      { id: 'daily-planner-card', span: 6 },
+    ];
+  } else if (roleId === 'sales-exec') {
+    preset = [
+      { id: 'hero-kpis', span: 12 },
+      { id: 'sales-pipeline', span: 6 },
+      { id: 'lead-sources', span: 6 },
+      { id: 'leads-kanban', span: 8 },
+      { id: 'ai-assistant', span: 4 },
+      { id: 'upcoming-schedule', span: 6 },
+      { id: 'daily-planner-card', span: 6 },
+      { id: 'tasks-kanban', span: 12 },
+    ];
+  } else if (roleId === 'hr-manager') {
+    preset = [
+      { id: 'hero-kpis', span: 12 },
+      { id: 'team-workload', span: 6 },
+      { id: 'daily-planner-card', span: 6 },
+      { id: 'tasks-kanban', span: 7 },
+      { id: 'upcoming-schedule', span: 5 },
+      { id: 'projects-progress', span: 6 },
+      { id: 'recent-activities', span: 6 },
+    ];
+  } else {
+    // Employee / Developer / Project Staff / Custom Role ("My Workspace")
+    preset = [
+      { id: 'hero-kpis', span: 12 },
+      { id: 'tasks-kanban', span: 7 },
+      { id: 'daily-planner-card', span: 5 },
+      { id: 'projects-progress', span: 6 },
+      { id: 'upcoming-schedule', span: 6 },
+      { id: 'leads-kanban', span: 8 },
+      { id: 'sales-pipeline', span: 4 },
+      { id: 'financial-overview', span: 6 },
+      { id: 'recent-activities', span: 6 },
+    ];
+  }
+
+  return preset.filter((item) => isWidgetPermitted(item.id, can));
+}
+
 export function getSkyLayoutKey(userId?: string | null): string {
   return `ozostack_sky_dashboard_layout_v1_${userId || 'global'}`;
 }
 
-export function loadSkyLayout(userId?: string | null): SkyLayoutItem[] {
+export function loadSkyLayout(
+  userId: string | null | undefined,
+  roleId: string | undefined,
+  can: (module: string) => boolean
+): SkyLayoutItem[] {
   try {
     const raw = localStorage.getItem(getSkyLayoutKey(userId));
     if (raw) {
@@ -186,15 +269,16 @@ export function loadSkyLayout(userId?: string | null): SkyLayoutItem[] {
             item &&
             typeof item === 'object' &&
             VALID_IDS.has(item.id) &&
-            VALID_SPANS.has(Number(item.span))
+            VALID_SPANS.has(Number(item.span)) &&
+            isWidgetPermitted(item.id, can)
         );
         return cleaned;
       }
     }
   } catch {
-    /* fallback to default */
+    /* fallback to role default */
   }
-  return [...DEFAULT_SKY_LAYOUT];
+  return getDefaultLayoutForRole(roleId, can);
 }
 
 export function saveSkyLayout(userId: string | null | undefined, layout: SkyLayoutItem[]): void {

@@ -146,6 +146,7 @@ export const SEED_ROLES: Role[] = [
     color: '#0ea5e9',
     dataScope: 'Own',
     permissions: {
+      Dashboard: ['view'],
       ...grant(group('CRM & Sales'), ['view', 'create', 'edit', 'export']),
       ...grant(group('Projects'), ['view', 'create', 'edit', 'delete', 'export', 'approve']),
       ...grant(group('Marketing'), ['view', 'create', 'edit', 'export']),
@@ -161,6 +162,7 @@ export const SEED_ROLES: Role[] = [
     color: '#f59e0b',
     dataScope: 'Own',
     permissions: {
+      Dashboard: ['view'],
       ...grant(group('CRM & Sales'), ['view', 'create', 'edit']),
       ...grant(group('Projects'), ['view', 'create', 'edit']),
       Email: ['view', 'create', 'edit', 'delete'],
@@ -177,6 +179,7 @@ export const SEED_ROLES: Role[] = [
     color: '#64748b',
     dataScope: 'Own',
     permissions: {
+      Dashboard: ['view'],
       ...grant(['Projects', 'Tasks', 'Events & Calendar', 'To Do & Notes', 'Time Tracking', 'Documents', 'Leads'], ['view', 'create', 'edit', 'delete']),
       Team: ['view'],
       Payroll: ['view'],

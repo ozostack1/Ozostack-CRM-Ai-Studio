@@ -39,6 +39,7 @@ import {
   Lock,
   ListTodo,
   StickyNote,
+  Paperclip,
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
@@ -71,13 +72,14 @@ import {
   RevenueTransaction,
 } from '../../types/crm';
 import {
-  DEFAULT_SKY_LAYOUT,
   SKY_WIDGET_CATALOG,
   SPAN_OPTIONS,
   SkyLayoutItem,
   SkyWidgetCategory,
   SkyWidgetId,
   SkyWidgetSpan,
+  getDefaultLayoutForRole,
+  isWidgetPermitted,
   loadSkyLayout,
   saveSkyLayout,
   spanToColClass,
@@ -159,15 +161,18 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
   onCloseWidgetPickerExternal,
 }) => {
   const { theme, setActiveNav } = useTheme();
-  const { currentUser, impersonator, scopeFilter } = useAuth();
+  const { currentUser, currentRole, impersonator, scopeFilter, can } = useAuth();
   const { currency, formatMoney } = useSystemCurrency();
   const { config: crmConfig } = useCrmConfig();
   const leadsKanbanRef = useRef<HTMLDivElement | null>(null);
   const isLight = theme === 'white-sky';
   const userId = currentUser?.id || '';
+  const isSuperAdmin = currentRole?.id === 'super-admin';
 
-  // Editable Dashboard Layout State (per user)
-  const [layout, setLayout] = useState<SkyLayoutItem[]>(() => loadSkyLayout(userId));
+  // Editable Dashboard Layout State (per user, role-aware & strictly permission-filtered)
+  const [layout, setLayout] = useState<SkyLayoutItem[]>(() =>
+    loadSkyLayout(userId, currentRole?.id, can)
+  );
   const [isEditMode, setIsEditMode] = useState(false);
   const [isWidgetModalOpen, setIsWidgetModalOpen] = useState(false);
   const [widgetCategoryFilter, setWidgetCategoryFilter] = useState<'All' | SkyWidgetCategory>('All');
@@ -175,8 +180,18 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
   const [dragOverId, setDragOverId] = useState<SkyWidgetId | null>(null);
 
   useEffect(() => {
-    setLayout(loadSkyLayout(userId));
-  }, [userId]);
+    setLayout(loadSkyLayout(userId, currentRole?.id, can));
+  }, [userId, currentRole?.id, can]);
+
+  // Runtime permission enforcement: if Admin revokes a module, widgets hide immediately
+  const allowedCatalog = useMemo(
+    () => SKY_WIDGET_CATALOG.filter((w) => isWidgetPermitted(w.id, can)),
+    [can]
+  );
+  const visibleLayout = useMemo(
+    () => layout.filter((item) => isWidgetPermitted(item.id, can)),
+    [layout, can]
+  );
 
   const updateLayout = (next: SkyLayoutItem[]) => {
     setLayout(next);
@@ -184,6 +199,7 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
   };
 
   const handleToggleWidget = (id: SkyWidgetId) => {
+    if (!isWidgetPermitted(id, can)) return;
     const exists = layout.some((item) => item.id === id);
     if (exists) {
       updateLayout(layout.filter((item) => item.id !== id));
@@ -195,23 +211,23 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
   };
 
   const handleMoveWidget = (id: SkyWidgetId, dir: -1 | 1) => {
-    const idx = layout.findIndex((i) => i.id === id);
+    const idx = visibleLayout.findIndex((i) => i.id === id);
     if (idx < 0) return;
     const target = idx + dir;
-    if (target < 0 || target >= layout.length) return;
-    const next = [...layout];
+    if (target < 0 || target >= visibleLayout.length) return;
+    const next = [...visibleLayout];
     const [moved] = next.splice(idx, 1);
     next.splice(target, 0, moved);
     updateLayout(next);
   };
 
   const handleChangeSpan = (id: SkyWidgetId, span: SkyWidgetSpan) => {
-    updateLayout(layout.map((item) => (item.id === id ? { ...item, span } : item)));
+    updateLayout(visibleLayout.map((item) => (item.id === id ? { ...item, span } : item)));
   };
 
   const handleResetLayout = () => {
-    updateLayout([...DEFAULT_SKY_LAYOUT]);
-    onNotify('Dashboard widgets reset to default layout.');
+    updateLayout(getDefaultLayoutForRole(currentRole?.id, can));
+    onNotify('Dashboard widgets reset to your role default layout.');
   };
 
   const handleDropWidget = (targetId: SkyWidgetId) => {
@@ -220,10 +236,10 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
       setDragOverId(null);
       return;
     }
-    const fromIdx = layout.findIndex((i) => i.id === draggedId);
-    const toIdx = layout.findIndex((i) => i.id === targetId);
+    const fromIdx = visibleLayout.findIndex((i) => i.id === draggedId);
+    const toIdx = visibleLayout.findIndex((i) => i.id === targetId);
     if (fromIdx >= 0 && toIdx >= 0) {
-      const next = [...layout];
+      const next = [...visibleLayout];
       const [moved] = next.splice(fromIdx, 1);
       next.splice(toIdx, 0, moved);
       updateLayout(next);
@@ -656,7 +672,7 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
     return items.sort((a, b) => a.date.localeCompare(b.date)).slice(0, 5);
   }, [scopedCalendar, scopedFollowUps]);
 
-  // Recent Activities
+  // Recent Activities (strictly filtered to modules this role is allowed to view)
   const recentActivities = useMemo(() => {
     const feed: {
       id: string;
@@ -666,39 +682,56 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
       nav: string;
     }[] = [];
 
-    scopedLeads.slice(0, 3).forEach((l) => {
-      feed.push({
-        id: `act-lead-${l.id}`,
-        text: `Lead "${l.name}" (${l.company || 'Direct'}) — ${l.status}`,
-        meta: l.source || 'CRM Lead',
-        tone: 'blue',
-        nav: 'Leads',
-      });
-    });
-    rawData.invoices.slice(0, 2).forEach((inv) => {
-      feed.push({
-        id: `act-inv-${inv.id}`,
-        text: `Invoice ${inv.invoiceNumber} for ${inv.client} — ${inv.status}`,
-        meta: formatMoney(parseMoney(inv.totalAmount ?? inv.amountNumeric ?? inv.amount)),
-        tone: 'emerald',
-        nav: 'Invoices',
-      });
-    });
-    scopedTasks
-      .filter((t) => t.status === 'Completed')
-      .slice(0, 2)
-      .forEach((t) => {
+    if (can('Leads')) {
+      scopedLeads.slice(0, 3).forEach((l) => {
         feed.push({
-          id: `act-task-${t.id}`,
-          text: `Task completed: ${t.title}`,
-          meta: t.assignee || 'Team',
-          tone: 'purple',
-          nav: 'Tasks',
+          id: `act-lead-${l.id}`,
+          text: `Lead "${l.name}" (${l.company || 'Direct'}) — ${l.status}`,
+          meta: l.source || 'CRM Lead',
+          tone: 'blue',
+          nav: 'Leads',
         });
       });
+    }
+    if (can('Invoices')) {
+      rawData.invoices.slice(0, 2).forEach((inv) => {
+        feed.push({
+          id: `act-inv-${inv.id}`,
+          text: `Invoice ${inv.invoiceNumber} for ${inv.client} — ${inv.status}`,
+          meta: formatMoney(parseMoney(inv.totalAmount ?? inv.amountNumeric ?? inv.amount)),
+          tone: 'emerald',
+          nav: 'Invoices',
+        });
+      });
+    }
+    if (can('Tasks')) {
+      scopedTasks
+        .filter((t) => t.status === 'Completed')
+        .slice(0, 3)
+        .forEach((t) => {
+          feed.push({
+            id: `act-task-${t.id}`,
+            text: `Task completed: ${t.title}`,
+            meta: t.assignee || 'Team',
+            tone: 'purple',
+            nav: 'Tasks',
+          });
+        });
+    }
+    if (can('Projects') && feed.length < 5) {
+      scopedProjects.slice(0, 2).forEach((p) => {
+        feed.push({
+          id: `act-proj-${p.id}`,
+          text: `Project "${p.name}" — ${p.status} (${p.progress || 0}%)`,
+          meta: p.client || 'Project',
+          tone: 'amber',
+          nav: 'Projects',
+        });
+      });
+    }
 
     return feed.slice(0, 5);
-  }, [scopedLeads, rawData.invoices, scopedTasks, formatMoney]);
+  }, [scopedLeads, rawData.invoices, scopedTasks, scopedProjects, formatMoney, can]);
 
   // Team Workload Summary
   const teamWorkload = useMemo(() => {
@@ -743,18 +776,36 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
     setAiAnswer(null);
 
     try {
-      const topLeadsList = scopedLeads
-        .slice(0, 8)
-        .map((l) => `${l.name} (${l.company}, ${l.status}, ${l.priority}, val:${l.value})`)
-        .join('; ');
-
-      const contextSummary = `Live Ozostack CRM Snapshot for ${currentUser?.name || 'User'} (${period}):
-- Total Leads: ${kpiStats.totalLeads} (Hot: ${kpiStats.hotLeads})
-- Active Deals: ${scopedDeals.length} | Conversion Rate: ${kpiStats.conversionRate}%
-- Revenue: ${formatMoney(financeMetrics.totalRevenue)} | Expenses: ${formatMoney(financeMetrics.totalExpenses)} | Net Profit: ${formatMoney(financeMetrics.netProfit)}
-- Active Projects: ${kpiStats.activeProjects}/${kpiStats.totalProjects} | Pending Tasks: ${kpiStats.pendingTasks}
-- Upcoming Follow-Ups/Meetings: ${upcomingSchedule.length}
-- Sample Leads: ${topLeadsList || 'None yet'}`;
+      // Strictly include ONLY modules this user's role is permitted to access (zero data leak)
+      const lines: string[] = [
+        `Live OzoStack Workspace Snapshot for ${currentUser?.name || 'User'} (${currentRole?.name || 'Staff'}, ${period}):`,
+      ];
+      if (can('Leads')) {
+        const topLeadsList = scopedLeads
+          .slice(0, 8)
+          .map((l) => `${l.name} (${l.company}, ${l.status}, ${l.priority}, val:${l.value})`)
+          .join('; ');
+        lines.push(`- Assigned Leads: ${kpiStats.totalLeads} (Hot: ${kpiStats.hotLeads})`);
+        if (topLeadsList) lines.push(`- Sample Leads: ${topLeadsList}`);
+      }
+      if (can('Deals') || can('Pipeline')) {
+        lines.push(`- Active Deals: ${scopedDeals.length} | Conversion Rate: ${kpiStats.conversionRate}%`);
+      }
+      if (can('Revenue') || can('Profit & Loss')) {
+        lines.push(
+          `- Revenue: ${formatMoney(financeMetrics.totalRevenue)} | Expenses: ${formatMoney(financeMetrics.totalExpenses)} | Net Profit: ${formatMoney(financeMetrics.netProfit)}`
+        );
+      }
+      if (can('Projects')) {
+        lines.push(`- Active Projects: ${kpiStats.activeProjects}/${kpiStats.totalProjects}`);
+      }
+      if (can('Tasks')) {
+        lines.push(`- Pending Tasks: ${kpiStats.pendingTasks} (${kpiStats.completedTasks} completed)`);
+      }
+      if (can('Events & Calendar') || can('Follow Ups')) {
+        lines.push(`- Upcoming Follow-Ups/Meetings: ${upcomingSchedule.length}`);
+      }
+      const contextSummary = lines.join('\n');
 
       const resp = await fetch('/api/ai/generate', {
         method: 'POST',
@@ -856,61 +907,138 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
   // Render individual widget content by ID
   const renderWidget = (id: SkyWidgetId) => {
     switch (id) {
-      case 'hero-kpis':
+      case 'hero-kpis': {
+        const todayIso = getLocalDateIso(0);
+        const overdueTasksCount = scopedTasks.filter(
+          (t) => t.status !== 'Completed' && t.dueDate && t.dueDate < todayIso
+        ).length;
+
+        const heroCards: {
+          label: string;
+          value: string;
+          sub: string;
+          icon: React.ComponentType<{ className?: string }>;
+          iconBg: string;
+          accent: string;
+          spark: string;
+          nav: string;
+        }[] = [];
+
+        if (can('Leads')) {
+          heroCards.push({
+            label: isSuperAdmin ? 'Total Leads' : 'My Leads',
+            value: kpiStats.totalLeads.toLocaleString(),
+            sub: `${kpiStats.hotLeads} hot leads`,
+            icon: Users,
+            iconBg: 'bg-blue-500',
+            accent: '#2563eb',
+            spark: 'M0 24 Q15 20 28 22 T55 12 T82 14 T110 4',
+            nav: 'Leads',
+          });
+        }
+        if (can('Revenue') || can('Profit & Loss')) {
+          heroCards.push({
+            label: 'Sales Revenue',
+            value: formatMoney(financeMetrics.totalRevenue),
+            sub: `${financeMetrics.marginPct}% net margin`,
+            icon: DollarSign,
+            iconBg: 'bg-emerald-500',
+            accent: '#10b981',
+            spark: 'M0 26 Q18 22 34 17 T66 13 T90 8 T110 3',
+            nav: 'Revenue',
+          });
+        }
+        if (can('Projects')) {
+          heroCards.push({
+            label: isSuperAdmin ? 'Active Projects' : 'My Projects',
+            value: String(kpiStats.activeProjects),
+            sub: `of ${kpiStats.totalProjects} assigned`,
+            icon: Rocket,
+            iconBg: 'bg-violet-500',
+            accent: '#8b5cf6',
+            spark: 'M0 25 Q22 23 40 16 T72 18 T94 9 T110 5',
+            nav: 'Projects',
+          });
+        }
+        if (can('Tasks')) {
+          heroCards.push({
+            label: isSuperAdmin ? 'Pending Tasks' : 'My Pending Tasks',
+            value: String(kpiStats.pendingTasks),
+            sub:
+              overdueTasksCount > 0
+                ? `${overdueTasksCount} overdue · ${kpiStats.completedTasks} done`
+                : `${kpiStats.completedTasks} completed`,
+            icon: ClipboardList,
+            iconBg: 'bg-amber-500',
+            accent: '#f59e0b',
+            spark: 'M0 24 Q18 19 36 21 T68 12 T92 14 T110 6',
+            nav: 'Tasks',
+          });
+        }
+        if (can('Leads') || can('Deals') || can('Pipeline')) {
+          heroCards.push({
+            label: 'Conversion Rate',
+            value: `${kpiStats.conversionRate}%`,
+            sub: `${kpiStats.wonCount} won deals/leads`,
+            icon: TrendingUp,
+            iconBg: 'bg-teal-500',
+            accent: '#14b8a6',
+            spark: 'M0 25 Q20 21 38 18 T70 11 T95 9 T110 4',
+            nav: 'Pipeline',
+          });
+        }
+        if (heroCards.length < 5 && can('Invoices') && !can('Leads')) {
+          heroCards.push({
+            label: 'Pending Invoices',
+            value: formatMoney(financeMetrics.pendingInvTotal + financeMetrics.overdueInvTotal),
+            sub: `${rawData.invoices.filter((i) => i.status !== 'Paid').length} awaiting payment`,
+            icon: Receipt,
+            iconBg: 'bg-sky-500',
+            accent: '#0ea5e9',
+            spark: 'M0 24 Q20 20 42 15 T74 14 T110 5',
+            nav: 'Invoices',
+          });
+        }
+        if (heroCards.length < 5 && (can('Events & Calendar') || can('Follow Ups'))) {
+          heroCards.push({
+            label: 'Upcoming Schedule',
+            value: String(upcomingSchedule.length),
+            sub: `${upcomingSchedule.filter((u) => u.isToday).length} due today`,
+            icon: Calendar,
+            iconBg: 'bg-indigo-500',
+            accent: '#6366f1',
+            spark: 'M0 25 Q18 22 40 16 T76 12 T110 5',
+            nav: can('Follow Ups') ? 'Follow Ups' : 'Events & Calendar',
+          });
+        }
+        if (heroCards.length < 5 && !impersonator) {
+          heroCards.push({
+            label: 'My Daily Rating',
+            value:
+              myPlannerSummary.todayRating.total > 0
+                ? `★ ${myPlannerSummary.todayRating.rating.toFixed(1)}`
+                : 'Plan Day',
+            sub: `${myPlannerSummary.todayRating.completed}/${myPlannerSummary.todayRating.total} done · ${myPlannerSummary.weekly.streakDays}d streak`,
+            icon: Star,
+            iconBg: 'bg-emerald-500',
+            accent: '#10b981',
+            spark: 'M0 26 Q22 20 44 17 T78 10 T110 4',
+            nav: 'To Do & Notes',
+          });
+        }
+
+        const gridColsClass =
+          heroCards.length <= 2
+            ? 'lg:grid-cols-2'
+            : heroCards.length === 3
+            ? 'lg:grid-cols-3'
+            : heroCards.length === 4
+            ? 'lg:grid-cols-4'
+            : 'lg:grid-cols-5';
+
         return (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-            {[
-              {
-                label: 'Total Leads',
-                value: kpiStats.totalLeads.toLocaleString(),
-                sub: `${kpiStats.hotLeads} hot leads`,
-                icon: Users,
-                iconBg: 'bg-blue-500',
-                accent: '#2563eb',
-                spark: 'M0 24 Q15 20 28 22 T55 12 T82 14 T110 4',
-                nav: 'Leads',
-              },
-              {
-                label: 'Sales Revenue',
-                value: formatMoney(financeMetrics.totalRevenue),
-                sub: `${financeMetrics.marginPct}% net margin`,
-                icon: DollarSign,
-                iconBg: 'bg-emerald-500',
-                accent: '#10b981',
-                spark: 'M0 26 Q18 22 34 17 T66 13 T90 8 T110 3',
-                nav: 'Revenue',
-              },
-              {
-                label: 'Active Projects',
-                value: String(kpiStats.activeProjects),
-                sub: `of ${kpiStats.totalProjects} total`,
-                icon: Rocket,
-                iconBg: 'bg-violet-500',
-                accent: '#8b5cf6',
-                spark: 'M0 25 Q22 23 40 16 T72 18 T94 9 T110 5',
-                nav: 'Projects',
-              },
-              {
-                label: 'Pending Tasks',
-                value: String(kpiStats.pendingTasks),
-                sub: `${kpiStats.completedTasks} completed`,
-                icon: ClipboardList,
-                iconBg: 'bg-amber-500',
-                accent: '#f59e0b',
-                spark: 'M0 24 Q18 19 36 21 T68 12 T92 14 T110 6',
-                nav: 'Tasks',
-              },
-              {
-                label: 'Conversion Rate',
-                value: `${kpiStats.conversionRate}%`,
-                sub: `${kpiStats.wonCount} won deals/leads`,
-                icon: TrendingUp,
-                iconBg: 'bg-teal-500',
-                accent: '#14b8a6',
-                spark: 'M0 25 Q20 21 38 18 T70 11 T95 9 T110 4',
-                nav: 'Pipeline',
-              },
-            ].map((card) => {
+          <div className={`grid grid-cols-1 sm:grid-cols-2 ${gridColsClass} gap-3`}>
+            {heroCards.slice(0, 5).map((card) => {
               const Icon = card.icon;
               const gradId = `sp-${card.label.replace(/\s+/g, '')}`;
               return (
@@ -957,6 +1085,7 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
             })}
           </div>
         );
+      }
 
       case 'revenue-overview':
         return (
@@ -1340,11 +1469,20 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
                 Ask anything about your live leads, revenue, pipeline or tasks...
               </p>
               <div className="space-y-1.5 mb-3">
-                {[
-                  'Which leads are most likely to convert?',
-                  'Summarize my revenue, expenses & profit',
-                  'Suggest top 3 actions to close more deals today',
-                ].map((prompt) => (
+                {(can('Leads')
+                  ? [
+                      'Which leads are most likely to convert?',
+                      can('Revenue')
+                        ? 'Summarize my revenue, expenses & profit'
+                        : 'Summarize my pending tasks & follow-ups',
+                      'Suggest top 3 actions to close more deals today',
+                    ]
+                  : [
+                      'Summarize my pending tasks & top priorities today',
+                      'Which projects need my attention first?',
+                      'Give me a focused 3-step plan for today',
+                    ]
+                ).map((prompt) => (
                   <button
                     key={prompt}
                     type="button"
@@ -1457,8 +1595,14 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
                               <div className={`text-[11px] font-semibold line-clamp-2 ${done ? 'line-through text-slate-400' : 'text-slate-800 dark:text-slate-100'}`}>
                                 {task.title}
                               </div>
-                              <div className="text-[9px] text-slate-400 mt-0.5 truncate">
-                                {task.assignee || 'Unassigned'}
+                              <div className="flex items-center justify-between gap-1 text-[9px] text-slate-400 mt-0.5">
+                                <span className="truncate">{task.assignee || 'Unassigned'}</span>
+                                {task.attachments && task.attachments.length > 0 && (
+                                  <span className="inline-flex items-center gap-0.5 text-sky-500 font-bold shrink-0">
+                                    <Paperclip className="w-2.5 h-2.5" />
+                                    {task.attachments.length}
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </button>
@@ -1661,18 +1805,25 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
             { label: 'Meetings', value: String(upcomingSchedule.length), note: 'upcoming', color: 'text-indigo-600 dark:text-indigo-400', nav: 'Events & Calendar' },
           ],
         };
+        const permittedTabs = (['Sales', 'Finance', 'Projects', 'Tasks'] as const).filter((tab) => {
+          if (tab === 'Sales') return can('Leads') || can('Deals') || can('Pipeline');
+          if (tab === 'Finance') return can('Revenue') || can('Invoices') || can('Expenses') || can('Profit & Loss');
+          if (tab === 'Projects') return can('Projects');
+          return can('Tasks');
+        });
+        const activeKpTab = permittedTabs.includes(kpTab) ? kpTab : (permittedTabs[0] || 'Tasks');
         return (
           <div className={`p-4 sm:p-5 rounded-2xl border h-full ${cardClass}`}>
             <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
               <h2 className="text-sm font-extrabold">Key Performance</h2>
               <div className="flex items-center gap-1 p-0.5 rounded-xl bg-slate-100 dark:bg-slate-800/80 text-[11px]">
-                {(['Sales', 'Finance', 'Projects', 'Tasks'] as const).map((tab) => (
+                {permittedTabs.map((tab) => (
                   <button
                     key={tab}
                     type="button"
                     onClick={() => setKpTab(tab)}
                     className={`px-2.5 py-1 rounded-lg font-bold transition-colors ${
-                      kpTab === tab
+                      activeKpTab === tab
                         ? 'bg-white dark:bg-slate-700 text-sky-600 dark:text-sky-400 shadow-2xs'
                         : 'text-slate-500 hover:text-slate-800 dark:hover:text-white'
                     }`}
@@ -1683,7 +1834,7 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
               </div>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-              {sets[kpTab].map((m) => (
+              {sets[activeKpTab].map((m) => (
                 <button
                   key={m.label}
                   type="button"
@@ -1715,11 +1866,16 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
               {[
                 { name: 'Projects', sub: `${kpiStats.activeProjects} Active`, icon: FolderKanban, color: 'bg-sky-500/10 text-sky-500' },
                 { name: 'Tasks', sub: `${kpiStats.pendingTasks} Due`, icon: ClipboardList, color: 'bg-indigo-500/10 text-indigo-500' },
+                { name: 'Leads', sub: `${kpiStats.totalLeads} Leads`, icon: Users, color: 'bg-blue-500/10 text-blue-500' },
                 { name: 'Invoices', sub: `${rawData.invoices.length} Total`, icon: Receipt, color: 'bg-emerald-500/10 text-emerald-500' },
                 { name: 'Expenses', sub: formatMoney(financeMetrics.totalExpenses), icon: CreditCard, color: 'bg-rose-500/10 text-rose-500' },
                 { name: 'Payments', sub: `${rawData.payments.length} Settled`, icon: Banknote, color: 'bg-teal-500/10 text-teal-500' },
                 { name: 'Profit & Loss', sub: formatMoney(financeMetrics.netProfit), icon: TrendingUp, color: 'bg-amber-500/10 text-amber-500' },
-              ].map((mod) => {
+                { name: 'To Do & Notes', sub: 'Daily Planner', icon: ListTodo, color: 'bg-violet-500/10 text-violet-500' },
+              ]
+                .filter((mod) => can(mod.name))
+                .slice(0, 6)
+                .map((mod) => {
                 const Icon = mod.icon;
                 return (
                   <button
@@ -1964,7 +2120,7 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
     }
   };
 
-  const firstItemIsHeroKpi = layout[0]?.id === 'hero-kpis' && !isEditMode;
+  const firstItemIsHeroKpi = visibleLayout[0]?.id === 'hero-kpis' && !isEditMode;
 
   return (
     <div className="space-y-4">
@@ -2019,18 +2175,26 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
               {getInitials(currentUser?.name)}
             </div>
             <div>
-              <h1 className="text-lg sm:text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-                {getGreeting()}, {firstName}! 👋
-              </h1>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="text-lg sm:text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+                  {getGreeting()}, {firstName}! 👋
+                </h1>
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-300/50 dark:border-sky-700/60">
+                  {isSuperAdmin ? 'Executive Command' : `My Workspace · ${currentRole?.name || 'Staff'}`}
+                </span>
+              </div>
               <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">
-                Here’s what’s happening with your business today — live & customizable.
+                {isSuperAdmin
+                  ? 'Here’s what’s happening across your business today — live & customizable.'
+                  : 'Your personalized workspace showing only your assigned work & permitted modules.'}
               </p>
             </div>
           </div>
 
           {/* Right Action Controls */}
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Dashboard Design Dropdown */}
+            {/* Dashboard Design Dropdown (Super Admin can switch Sky Executive <-> Classic Command) */}
+            {isSuperAdmin && (
             <div className="relative">
               <button
                 type="button"
@@ -2092,8 +2256,10 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
                 </div>
               )}
             </div>
+            )}
 
-            {/* Save as Default */}
+            {/* Save as Default (Super Admin) */}
+            {isSuperAdmin && (
             <button
               type="button"
               onClick={() => onSaveDefaultDesign(design)}
@@ -2109,6 +2275,7 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
               <Star className={`w-3.5 h-3.5 ${isCurrentDefault ? 'fill-current' : ''}`} />
               <span>{isCurrentDefault ? 'Default' : 'Set Default'}</span>
             </button>
+            )}
 
             {/* Period Filter */}
             <select
@@ -2154,10 +2321,10 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
               }`}
             >
               <Plus className="w-3.5 h-3.5" />
-              <span>Widgets ({layout.length}/{SKY_WIDGET_CATALOG.length})</span>
+              <span>Widgets ({visibleLayout.length}/{allowedCatalog.length})</span>
             </button>
 
-            {/* + Quick Create Dropdown */}
+            {/* + Quick Create Dropdown (filtered strictly by role create/view permissions) */}
             <div className="relative">
               <button
                 type="button"
@@ -2179,31 +2346,33 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
                   }`}
                 >
                   {[
-                    { label: 'New Lead', action: () => (onQuickCreate ? onQuickCreate('lead') : setActiveNav('Leads')), icon: Users },
-                    { label: 'New Deal', action: () => (onQuickCreate ? onQuickCreate('deal') : setActiveNav('Deals')), icon: Briefcase },
-                    { label: 'New Project', action: () => (onQuickCreate ? onQuickCreate('project') : setActiveNav('Projects')), icon: FolderKanban },
-                    { label: 'New Task', action: () => (onQuickCreate ? onQuickCreate('task') : setActiveNav('Tasks')), icon: ClipboardList },
-                    { label: 'Schedule Meeting', action: () => (onQuickCreate ? onQuickCreate('event') : setActiveNav('Events & Calendar')), icon: Calendar },
-                    { label: 'New Invoice', action: () => setActiveNav('Invoices'), icon: Receipt },
-                    { label: 'Personal To-Do', action: () => (onQuickCreate ? onQuickCreate('todo') : setActiveNav('To Do & Notes')), icon: ListTodo },
-                    { label: 'Personal Note', action: () => (onQuickCreate ? onQuickCreate('note') : setActiveNav('To Do & Notes')), icon: StickyNote },
-                  ].map((item) => {
-                    const Icon = item.icon;
-                    return (
-                      <button
-                        key={item.label}
-                        type="button"
-                        onClick={() => {
-                          setQuickCreateOpen(false);
-                          item.action();
-                        }}
-                        className="w-full flex items-center gap-2 px-2.5 py-2 rounded-xl font-semibold hover:bg-sky-50 dark:hover:bg-slate-800 text-left transition-colors"
-                      >
-                        <Icon className="w-3.5 h-3.5 text-sky-500" />
-                        <span>{item.label}</span>
-                      </button>
-                    );
-                  })}
+                    { label: 'New Lead', mod: 'Leads', action: () => (onQuickCreate ? onQuickCreate('lead') : setActiveNav('Leads')), icon: Users },
+                    { label: 'New Deal', mod: 'Deals', action: () => (onQuickCreate ? onQuickCreate('deal') : setActiveNav('Deals')), icon: Briefcase },
+                    { label: 'New Project', mod: 'Projects', action: () => (onQuickCreate ? onQuickCreate('project') : setActiveNav('Projects')), icon: FolderKanban },
+                    { label: 'New Task', mod: 'Tasks', action: () => (onQuickCreate ? onQuickCreate('task') : setActiveNav('Tasks')), icon: ClipboardList },
+                    { label: 'Schedule Meeting', mod: 'Events & Calendar', action: () => (onQuickCreate ? onQuickCreate('event') : setActiveNav('Events & Calendar')), icon: Calendar },
+                    { label: 'New Invoice', mod: 'Invoices', action: () => setActiveNav('Invoices'), icon: Receipt },
+                    { label: 'Personal To-Do', mod: 'To Do & Notes', action: () => (onQuickCreate ? onQuickCreate('todo') : setActiveNav('To Do & Notes')), icon: ListTodo },
+                    { label: 'Personal Note', mod: 'To Do & Notes', action: () => (onQuickCreate ? onQuickCreate('note') : setActiveNav('To Do & Notes')), icon: StickyNote },
+                  ]
+                    .filter((item) => can(item.mod, 'create'))
+                    .map((item) => {
+                      const Icon = item.icon;
+                      return (
+                        <button
+                          key={item.label}
+                          type="button"
+                          onClick={() => {
+                            setQuickCreateOpen(false);
+                            item.action();
+                          }}
+                          className="w-full flex items-center gap-2 px-2.5 py-2 rounded-xl font-semibold hover:bg-sky-50 dark:hover:bg-slate-800 text-left transition-colors"
+                        >
+                          <Icon className="w-3.5 h-3.5 text-sky-500" />
+                          <span>{item.label}</span>
+                        </button>
+                      );
+                    })}
                 </div>
               )}
             </div>
@@ -2254,7 +2423,7 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
       )}
 
       {/* 2. DYNAMIC 12-COLUMN CUSTOMIZABLE WIDGETS GRID */}
-      {layout.length === 0 ? (
+      {visibleLayout.length === 0 ? (
         <div className={`p-10 rounded-2xl border text-center space-y-3 ${cardClass}`}>
           <LayoutDashboard className="w-8 h-8 mx-auto text-sky-400" />
           <h3 className="text-sm font-extrabold">No Widgets Selected</h3>
@@ -2284,7 +2453,7 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
             firstItemIsHeroKpi ? '-mt-11 relative z-20 px-0 sm:px-1' : ''
           }`}
         >
-          {layout.map((item, idx) => {
+          {visibleLayout.map((item, idx) => {
             const meta = SKY_WIDGET_CATALOG.find((w) => w.id === item.id);
             if (!meta) return null;
             const isDragged = draggedId === item.id;
@@ -2356,7 +2525,7 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
                       </button>
                       <button
                         type="button"
-                        disabled={idx === layout.length - 1}
+                        disabled={idx === visibleLayout.length - 1}
                         onClick={() => handleMoveWidget(item.id, 1)}
                         className="p-1 rounded hover:bg-sky-500/15 disabled:opacity-30"
                         title="Move later"
@@ -2429,12 +2598,12 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
               )}
             </div>
 
-            {/* Widget Cards Grid */}
+            {/* Widget Cards Grid (strictly filtered to modules this role is allowed to see) */}
             <div className="p-5 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {SKY_WIDGET_CATALOG.filter(
-                (w) => widgetCategoryFilter === 'All' || w.category === widgetCategoryFilter
-              ).map((widget) => {
-                const enabled = layout.some((l) => l.id === widget.id);
+              {allowedCatalog
+                .filter((w) => widgetCategoryFilter === 'All' || w.category === widgetCategoryFilter)
+                .map((widget) => {
+                  const enabled = visibleLayout.some((l) => l.id === widget.id);
                 return (
                   <button
                     key={widget.id}
@@ -2494,7 +2663,7 @@ export const SkyExecutiveDashboard: React.FC<SkyExecutiveDashboardProps> = ({
                 onClick={closeWidgetModal}
                 className="px-4 py-2 rounded-xl text-xs font-bold bg-sky-500 hover:bg-sky-600 text-white"
               >
-                Done ({layout.length} Active)
+                Done ({visibleLayout.length} Active)
               </button>
             </div>
           </div>
