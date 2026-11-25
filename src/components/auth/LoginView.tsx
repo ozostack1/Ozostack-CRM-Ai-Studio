@@ -211,10 +211,10 @@ export const LoginView: React.FC = () => {
             </div>
             <div className="flex flex-col">
               <span className="text-base font-extrabold tracking-wider text-white leading-none">
-                OZO STACK
+                OZOSTACK
               </span>
               <span className="text-[10px] font-semibold tracking-widest text-sky-400 uppercase mt-1">
-                Business Operating System
+                AI Business Operating System
               </span>
             </div>
           </a>
@@ -360,20 +360,20 @@ export const LoginView: React.FC = () => {
           <div className="text-center max-w-4xl mx-auto space-y-6">
             <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-sky-500/10 border border-sky-500/30 text-sky-300 text-xs font-bold">
               <Sparkles className="w-3.5 h-3.5 text-sky-400" />
-              <span>AI-Powered CEO Command Center · CRM · Finance · HRM & Payroll</span>
+              <span>Unified AI CRM · Sales Pipeline · Finance · Projects · HRM</span>
             </div>
 
             <h1 className="text-3xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-white leading-[1.12]">
-              Run Your Entire Company From One{' '}
+              One Intelligent Platform to{' '}
               <span className="bg-gradient-to-r from-sky-400 via-cyan-300 to-indigo-400 bg-clip-text text-transparent">
-                Intelligent Command Center
+                Scale Your Entire Business
               </span>
             </h1>
 
             <p className="text-sm sm:text-base lg:text-lg text-slate-300 max-w-3xl mx-auto leading-relaxed">
-              OzoStack unifies your Sales Pipeline, Bulk Lead Engine, Project & Sprint Delivery,
-              Commercial Invoicing & P&amp;L, Automated Employee Payroll, and AI Business Copilot into a
-              single high-velocity workspace.
+              OzoStack brings AI lead discovery, visual sales pipelines, automated outreach
+              campaigns, project delivery, commercial billing, and team payroll together in one
+              fast, secure workspace.
             </p>
 
             <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
@@ -652,9 +652,9 @@ export const LoginView: React.FC = () => {
               className="w-8 h-8 rounded-lg object-cover border border-sky-500/30"
             />
             <div>
-              <span className="text-sm font-extrabold tracking-wider text-white">OZO STACK</span>
+              <span className="text-sm font-extrabold tracking-wider text-white">OZOSTACK</span>
               <p className="text-[11px] text-slate-400">
-                Automate. Innovate. Elevate. · Business Operating System
+                Smarter Operations. Faster Growth. · Unified AI Business OS
               </p>
             </div>
           </div>

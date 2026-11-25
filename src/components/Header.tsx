@@ -346,14 +346,14 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
           <div>
             <h1 className="text-base sm:text-lg font-extrabold tracking-tight leading-tight flex items-center gap-2">
-              CEO COMMAND CENTER
+              OzoStack Workspace
             </h1>
             <p
               className={`text-[11px] sm:text-xs font-medium leading-none mt-0.5 ${
                 isLight ? 'text-slate-500' : 'text-slate-400'
               }`}
             >
-              Real-time overview of your entire business
+              Unified CRM, Finance &amp; Operations Intelligence
             </p>
           </div>
         </div>

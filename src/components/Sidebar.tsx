@@ -326,10 +326,10 @@ export const Sidebar: React.FC = () => {
                   isLight ? 'text-slate-900' : 'text-white'
                 }`}
               >
-                OZO STACK
+                OZOSTACK
               </span>
               <span className="text-[9px] font-semibold tracking-widest text-sky-500 mt-1 uppercase truncate">
-                Automate. Innovate. Elevate.
+                AI Business OS
               </span>
             </div>
           )}
