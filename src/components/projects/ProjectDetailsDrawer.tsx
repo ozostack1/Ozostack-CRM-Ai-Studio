@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   X,
   FolderKanban,
@@ -40,87 +40,22 @@ import {
   ProjectActivityType,
 } from '../../types/crm';
 import { useTheme } from '../../context/ThemeContext';
+import { useAuth } from '../../context/AuthContext';
 import { useSystemCurrency } from '../../data/currencyService';
 
-const GPU_PIPELINE_TASKS: ProjectTaskItem[] = [
-  // 5 Remaining in-flight tasks
-  { id: 't-rem-1', title: 'Global Edge Anycast BGP Routing & Cloudflare Tunnel', assignee: 'Rizwan Khan', priority: 'Urgent', status: 'In Progress', dueDate: '2025-06-12', completed: false },
-  { id: 't-rem-2', title: 'KV Cache Paged Attention Dynamic Defragmentation', assignee: 'Sayed (CEO)', priority: 'High', status: 'In Progress', dueDate: '2025-06-08', completed: false },
-  { id: 't-rem-3', title: 'NVIDIA Triton Multi-Model Concurrency Load Testing', assignee: 'Rizwan Khan', priority: 'High', status: 'To Do', dueDate: '2025-06-05', completed: false },
-  { id: 't-rem-4', title: 'Sub-30ms P99 Latency SLA Telemetry & Prometheus Alerts', assignee: 'Rizwan Khan', priority: 'Medium', status: 'To Do', dueDate: '2025-06-10', completed: false },
-  { id: 't-rem-5', title: 'Client API Key Rate Limiting & Stripe Webhook Emission', assignee: 'Sayed (CEO)', priority: 'High', status: 'In Review', dueDate: '2025-06-14', completed: false },
-  // 25 Completed deliverables
-  { id: 't-comp-1', title: 'TensorRT-LLM FP8 & INT4 Quantization Matrix Build', assignee: 'Rizwan Khan', priority: 'Urgent', status: 'Completed', dueDate: '2025-04-02', completed: true },
-  { id: 't-comp-2', title: 'vLLM Streaming SSE Server on 8x NVIDIA H100 Cluster', assignee: 'Sayed (CEO)', priority: 'Urgent', status: 'Completed', dueDate: '2025-04-06', completed: true },
-  { id: 't-comp-3', title: 'CUDA Graph Execution Engine for Static Sequence Lengths', assignee: 'Rizwan Khan', priority: 'High', status: 'Completed', dueDate: '2025-04-09', completed: true },
-  { id: 't-comp-4', title: 'Continuous Batching Scheduler with Dynamic Queueing', assignee: 'Sayed (CEO)', priority: 'Urgent', status: 'Completed', dueDate: '2025-04-12', completed: true },
-  { id: 't-comp-5', title: 'FastAPI High-Throughput Streaming Webhook Gateway', assignee: 'Rizwan Khan', priority: 'High', status: 'Completed', dueDate: '2025-04-15', completed: true },
-  { id: 't-comp-6', title: 'Docker Image with NVIDIA Container Toolkit & CUDA 12.4', assignee: 'Rizwan Khan', priority: 'Medium', status: 'Completed', dueDate: '2025-04-18', completed: true },
-  { id: 't-comp-7', title: 'Prometheus DCGM Exporter for GPU Memory & SM Utilization', assignee: 'Sayed (CEO)', priority: 'Medium', status: 'Completed', dueDate: '2025-04-20', completed: true },
-  { id: 't-comp-8', title: 'Automated Worker Process Recycling on Out-Of-Memory (OOM)', assignee: 'Rizwan Khan', priority: 'High', status: 'Completed', dueDate: '2025-04-23', completed: true },
-  { id: 't-comp-9', title: 'Mutual TLS (mTLS) Encryption Between Edge and Model Fleet', assignee: 'Sayed (CEO)', priority: 'High', status: 'Completed', dueDate: '2025-04-26', completed: true },
-  { id: 't-comp-10', title: 'Token Chunking Buffer with Backpressure Flow Control', assignee: 'Rizwan Khan', priority: 'Medium', status: 'Completed', dueDate: '2025-04-28', completed: true },
-  { id: 't-comp-11', title: 'Weight Sharding Across Dual-Node NVLink Interconnects', assignee: 'Sayed (CEO)', priority: 'Urgent', status: 'Completed', dueDate: '2025-05-01', completed: true },
-  { id: 't-comp-12', title: 'Cold-Start Model Weight Pre-Loading from NVMe Cache', assignee: 'Rizwan Khan', priority: 'High', status: 'Completed', dueDate: '2025-05-03', completed: true },
-  { id: 't-comp-13', title: 'Horovod Distributed Evaluation for Output Token Parity', assignee: 'Sayed (CEO)', priority: 'Medium', status: 'Completed', dueDate: '2025-05-05', completed: true },
-  { id: 't-comp-14', title: 'Dynamic Prefix Caching for Multi-Turn System Prompts', assignee: 'Rizwan Khan', priority: 'High', status: 'Completed', dueDate: '2025-05-07', completed: true },
-  { id: 't-comp-15', title: 'JSON Schema Structured Output Enforcer in C++ Engine', assignee: 'Sayed (CEO)', priority: 'High', status: 'Completed', dueDate: '2025-05-09', completed: true },
-  { id: 't-comp-16', title: 'Zero-Copy Shared Memory Inter-Process Transport', assignee: 'Rizwan Khan', priority: 'Urgent', status: 'Completed', dueDate: '2025-05-11', completed: true },
-  { id: 't-comp-17', title: 'Automated Failover Routing on Unhealthy GPU Node', assignee: 'Sayed (CEO)', priority: 'High', status: 'Completed', dueDate: '2025-05-13', completed: true },
-  { id: 't-comp-18', title: 'TCP Keep-Alive Kernel Tuning for Long-Lived LLM Streams', assignee: 'Rizwan Khan', priority: 'Medium', status: 'Completed', dueDate: '2025-05-15', completed: true },
-  { id: 't-comp-19', title: 'Token Usage Accounting & Tenant Metering Engine', assignee: 'Sayed (CEO)', priority: 'High', status: 'Completed', dueDate: '2025-05-17', completed: true },
-  { id: 't-comp-20', title: 'Benchmark Load Generator Script with Synthetic Prompts', assignee: 'Rizwan Khan', priority: 'Medium', status: 'Completed', dueDate: '2025-05-18', completed: true },
-  { id: 't-comp-21', title: 'Grafana Latency Dashboard for CloudNest Operations Team', assignee: 'Sayed (CEO)', priority: 'Low', status: 'Completed', dueDate: '2025-05-19', completed: true },
-  { id: 't-comp-22', title: 'OpenTelemetry Trace Propagation Across Microservices', assignee: 'Rizwan Khan', priority: 'Medium', status: 'Completed', dueDate: '2025-05-20', completed: true },
-  { id: 't-comp-23', title: 'Automated CI/CD Regression Tests on PR Merges', assignee: 'Sayed (CEO)', priority: 'Medium', status: 'Completed', dueDate: '2025-05-21', completed: true },
-  { id: 't-comp-24', title: 'Disaster Recovery Warm Standby Replication in EU Central', assignee: 'Rizwan Khan', priority: 'High', status: 'Completed', dueDate: '2025-05-22', completed: true },
-  { id: 't-comp-25', title: 'CloudNest CTO Stage 2 Architecture Sign-off & Audit', assignee: 'Sayed (CEO)', priority: 'Urgent', status: 'Completed', dueDate: '2025-05-23', completed: true },
-];
+const getTodayIso = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+    d.getDate()
+  ).padStart(2, '0')}`;
+};
 
-const getInitialProjectTasks = (proj: Project): ProjectTaskItem[] => {
-  if (proj.tasks && proj.tasks.length > 0) {
-    return proj.tasks;
-  }
-  if (proj.id === 'proj-4' || proj.name?.includes('GPU Latency')) {
-    return GPU_PIPELINE_TASKS;
-  }
-  const total = Math.max(proj.totalTasks || 0, 1);
-  const completed = Math.min(proj.completedTasks || 0, total);
-  const remaining = total - completed;
-  const list: ProjectTaskItem[] = [];
-
-  const teamList =
-    Array.isArray(proj.team) && proj.team.length > 0
-      ? proj.team
-      : [proj.projectManager || 'Sayed (CEO)'];
-
-  for (let i = 1; i <= remaining; i++) {
-    const member = teamList[i % teamList.length];
-    list.push({
-      id: `task-rem-${proj.id}-${i}`,
-      title: `${proj.name || 'Project'} - In-Flight Work Item #${completed + i}`,
-      assignee: member,
-      status: i === 1 ? 'In Progress' : 'To Do',
-      priority: i === 1 ? 'Urgent' : 'High',
-      dueDate: proj.deadline || '2025-06-15',
-      completed: false,
-    });
-  }
-
-  for (let i = 1; i <= completed; i++) {
-    const member = teamList[i % teamList.length];
-    list.push({
-      id: `task-comp-${proj.id}-${i}`,
-      title: `${proj.name || 'Project'} - Completed Architecture Deliverable #${i}`,
-      assignee: member,
-      status: 'Completed',
-      priority: i % 2 === 0 ? 'High' : 'Medium',
-      dueDate: proj.startDate || '2025-03-20',
-      completed: true,
-    });
-  }
-
-  return list;
+// Strictly return real saved tasks — never fabricate synthetic placeholder tasks
+const getProjectTasks = (proj: Project): ProjectTaskItem[] => {
+  if (!Array.isArray(proj.tasks)) return [];
+  return proj.tasks.filter(
+    (t) => t && !String(t.id || '').startsWith('task-rem-') && !String(t.id || '').startsWith('task-comp-')
+  );
 };
 
 interface ProjectDetailsDrawerProps {
@@ -151,28 +86,36 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({
   onLogActivity,
 }) => {
   const { theme } = useTheme();
+  const { currentUser } = useAuth();
   const currency = useSystemCurrency();
   const isLight = theme === 'white-sky';
+  const authorName = currentUser?.name || project?.projectManager || 'Admin';
 
   const [activeTab, setActiveTab] = useState<'overview' | 'milestones' | 'tasks' | 'team' | 'activity'>('overview');
   const [newMilestoneTitle, setNewMilestoneTitle] = useState('');
-  const [newMilestoneDate, setNewMilestoneDate] = useState('2025-06-15');
+  const [newMilestoneDate, setNewMilestoneDate] = useState(() => project?.deadline || getTodayIso());
   const [isAddingMilestone, setIsAddingMilestone] = useState(false);
 
-  // Work Items & Tasks State
+  // Work Items & Tasks State (strictly real tasks, zero synthetic defaults)
   const effectiveTasks = useMemo(
-    () => (project ? getInitialProjectTasks(project) : []),
-    [project?.id, project?.tasks, project?.totalTasks, project?.completedTasks]
+    () => (project ? getProjectTasks(project) : []),
+    [project?.id, project?.tasks]
   );
-  const [taskFilter, setTaskFilter] = useState<'remaining' | 'completed' | 'all'>('remaining');
+  const [taskFilter, setTaskFilter] = useState<'remaining' | 'completed' | 'all'>('all');
   const [taskSearchQuery, setTaskSearchQuery] = useState('');
   const [isAddingTask, setIsAddingTask] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskAssignee, setNewTaskAssignee] = useState(
-    project?.team?.[0] || project?.projectManager || 'Rizwan Khan'
+    project?.team?.[0] || project?.projectManager || authorName
   );
-  const [newTaskPriority, setNewTaskPriority] = useState<ProjectPriority>('High');
-  const [newTaskDueDate, setNewTaskDueDate] = useState(project?.deadline || '2025-06-15');
+  const [newTaskPriority, setNewTaskPriority] = useState<ProjectTaskItem['priority']>('High');
+  const [newTaskDueDate, setNewTaskDueDate] = useState(() => project?.deadline || getTodayIso());
+
+  useEffect(() => {
+    setNewTaskAssignee(project?.team?.[0] || project?.projectManager || authorName);
+    setNewTaskDueDate(project?.deadline || getTodayIso());
+    setNewMilestoneDate(project?.deadline || getTodayIso());
+  }, [project?.id, project?.deadline, project?.projectManager, authorName]);
 
   const remainingTasks = useMemo(() => effectiveTasks.filter((t) => !t.completed), [effectiveTasks]);
   const completedTasksList = useMemo(() => effectiveTasks.filter((t) => t.completed), [effectiveTasks]);
@@ -251,21 +194,6 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({
     const nextTask = effectiveTasks.find((t) => !t.completed);
     if (nextTask) {
       handleToggleTask(nextTask.id);
-    } else {
-      if (project.completedTasks >= project.totalTasks) return;
-      const newCompleted = project.completedTasks + 1;
-      const newProgress = Math.min(100, Math.round((newCompleted / project.totalTasks) * 100));
-      onUpdateProject({
-        ...project,
-        completedTasks: newCompleted,
-        progress: newProgress,
-        status: newProgress === 100 ? 'Completed' : project.status,
-      });
-      onLogActivity?.(
-        project.id,
-        'task',
-        `Task progress completed (+1): ${newCompleted}/${project.totalTasks} tasks done (${newProgress}%)`
-      );
     }
   };
 
@@ -617,7 +545,7 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({
             <div>
               <span className="text-[10px] text-slate-400 uppercase font-semibold block">Tasks</span>
               <span className="text-xs font-bold text-indigo-500">
-                {project.completedTasks}/{project.totalTasks}
+                {completedTasksList.length}/{effectiveTasks.length}
               </span>
             </div>
             <div>
@@ -663,7 +591,7 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({
             >
               <span>Tasks & Bugs</span>
               <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-200 dark:bg-slate-700 font-bold">
-                {effectiveTasks.length || project.totalTasks}
+                {effectiveTasks.length}
               </span>
             </button>
             <button
@@ -1143,7 +1071,7 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({
                           <label className="text-[10px] text-slate-400 block mb-1">Priority</label>
                           <select
                             value={newTaskPriority}
-                            onChange={(e) => setNewTaskPriority(e.target.value as ProjectPriority)}
+                            onChange={(e) => setNewTaskPriority(e.target.value as ProjectTaskItem['priority'])}
                             className={`w-full px-2 py-1.5 text-xs rounded-lg border outline-none ${
                               isLight ? 'bg-white border-slate-200 text-slate-800' : 'bg-slate-900 border-slate-700 text-white'
                             }`}
@@ -1493,7 +1421,7 @@ export const ProjectDetailsDrawer: React.FC<ProjectDetailsDrawerProps> = ({
                       Log Project Note or Update
                     </span>
                     <span className="text-[10px] text-slate-400">
-                      Author: Sayed (CEO)
+                      Author: {authorName}
                     </span>
                   </div>
 

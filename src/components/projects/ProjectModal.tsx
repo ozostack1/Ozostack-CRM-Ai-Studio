@@ -22,7 +22,7 @@ import {
   ProjectPriority,
   ProjectHealth,
 } from '../../types/crm';
-import { INITIAL_COMPANIES } from '../../data/mockData';
+import { getRealCrmClients } from '../../data/financeUtils';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useSystemCurrency } from '../../data/currencyService';
@@ -70,13 +70,24 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
   projectToEdit,
 }) => {
   const { theme } = useTheme();
-  const { users } = useAuth();
+  const { users, currentUser } = useAuth();
   const currency = useSystemCurrency();
   const isLight = theme === 'white-sky';
   const staffList = React.useMemo(
     () => Array.from(new Set([...users.map((u) => u.name), ...MANAGERS])),
     [users]
   );
+  const clientSuggestions = React.useMemo(() => getRealCrmClients(), [isOpen]);
+
+  const getLocalIso = (offsetDays = 0) => {
+    const d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+      d.getDate()
+    ).padStart(2, '0')}`;
+  };
+
+  const defaultManager = currentUser?.name || staffList[0] || MANAGERS[0];
 
   const [name, setName] = useState('');
   const [client, setClient] = useState('');
@@ -84,13 +95,13 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
   const [status, setStatus] = useState<ProjectStatus>('In Progress');
   const [priority, setPriority] = useState<ProjectPriority>('High');
   const [health, setHealth] = useState<ProjectHealth>('Good');
-  const [progress, setProgress] = useState<number>(25);
-  const [budget, setBudget] = useState<number>(75000);
-  const [spent, setSpent] = useState<number>(18000);
-  const [startDate, setStartDate] = useState('2025-05-01');
-  const [deadline, setDeadline] = useState('2025-08-31');
-  const [projectManager, setProjectManager] = useState(MANAGERS[0]);
-  const [selectedTeam, setSelectedTeam] = useState<string[]>([MANAGERS[0], MANAGERS[1]]);
+  const [progress, setProgress] = useState<number>(0);
+  const [budget, setBudget] = useState<number>(0);
+  const [spent, setSpent] = useState<number>(0);
+  const [startDate, setStartDate] = useState(() => getLocalIso(0));
+  const [deadline, setDeadline] = useState(() => getLocalIso(30));
+  const [projectManager, setProjectManager] = useState(defaultManager);
+  const [selectedTeam, setSelectedTeam] = useState<string[]>([defaultManager]);
   const [description, setDescription] = useState('');
   const [tagsInput, setTagsInput] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -116,21 +127,21 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
       setName('');
       setClient('');
       setCategory(CATEGORIES[0]);
-      setStatus('In Progress');
-      setPriority('High');
+      setStatus('Planning');
+      setPriority('Medium');
       setHealth('Good');
-      setProgress(15);
-      setBudget(85000);
-      setSpent(12000);
-      setStartDate('2025-05-01');
-      setDeadline('2025-08-31');
-      setProjectManager(MANAGERS[0]);
-      setSelectedTeam([MANAGERS[0], MANAGERS[1]]);
+      setProgress(0);
+      setBudget(0);
+      setSpent(0);
+      setStartDate(getLocalIso(0));
+      setDeadline(getLocalIso(30));
+      setProjectManager(defaultManager);
+      setSelectedTeam([defaultManager]);
       setDescription('');
-      setTagsInput('Cloud, Architecture, Enterprise');
+      setTagsInput('');
     }
     setErrors({});
-  }, [projectToEdit, isOpen]);
+  }, [projectToEdit, isOpen, defaultManager]);
 
   if (!isOpen) return null;
 
@@ -158,6 +169,7 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
       .map((t) => t.trim())
       .filter((t) => t.length > 0);
 
+    const existingTasks = projectToEdit?.tasks || [];
     const saved: Project = {
       id: projectToEdit ? projectToEdit.id : `proj-${Date.now()}`,
       name: name.trim(),
@@ -173,20 +185,14 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
       deadline,
       projectManager,
       team: selectedTeam.length > 0 ? selectedTeam : [projectManager],
-      totalTasks: projectToEdit ? projectToEdit.totalTasks : 20,
-      completedTasks: projectToEdit
-        ? status === 'Completed'
-          ? projectToEdit.totalTasks
-          : projectToEdit.completedTasks
-        : Math.round(20 * (progress / 100)),
+      tasks: existingTasks,
+      totalTasks: existingTasks.length,
+      completedTasks: existingTasks.filter((t) => t.completed).length,
       openBugs: projectToEdit ? projectToEdit.openBugs : 0,
-      milestones: projectToEdit?.milestones || [
-        { id: 'm1', title: 'Architecture Scope & Design Spec', dueDate: startDate, completed: true },
-        { id: 'm2', title: 'Core Implementation & Integration', dueDate: deadline, completed: status === 'Completed' },
-      ],
+      milestones: projectToEdit?.milestones || [],
       description: description.trim() || undefined,
       tags: tags.length > 0 ? tags : undefined,
-      createdAt: projectToEdit?.createdAt || new Date().toISOString().split('T')[0],
+      createdAt: projectToEdit?.createdAt || getLocalIso(0),
     };
 
     onSave(saved);
@@ -275,9 +281,9 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
                   className={`${inputClass} pl-9`}
                 />
                 <datalist id="client-suggestions">
-                  {INITIAL_COMPANIES.map((c) => (
-                    <option key={c.id} value={c.name}>
-                      {c.industry}
+                  {clientSuggestions.map((c) => (
+                    <option key={c.name} value={c.name}>
+                      {c.email || c.phone || 'CRM Client'}
                     </option>
                   ))}
                 </datalist>

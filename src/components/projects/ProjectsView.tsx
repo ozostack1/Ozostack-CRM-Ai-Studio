@@ -38,7 +38,7 @@ import {
   ProjectActivity,
   ProjectActivityType,
 } from '../../types/crm';
-import { INITIAL_PROJECTS, INITIAL_PROJECT_ACTIVITIES } from '../../data/mockData';
+import { INITIAL_PROJECTS } from '../../data/mockData';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useSystemCurrency } from '../../data/currencyService';
@@ -68,6 +68,31 @@ export const ProjectsView: React.FC = () => {
   const currency = useSystemCurrency();
   const isLight = theme === 'white-sky';
 
+  const sanitizeProject = (p: Project): Project => {
+    if (!p || typeof p !== 'object') return p;
+    const mergedTeam = Array.from(
+      new Set([
+        ...(Array.isArray(p.team) ? p.team : []),
+        ...(p.projectManager ? [p.projectManager] : []),
+      ])
+    );
+    const cleanTasks = Array.isArray(p.tasks)
+      ? p.tasks.filter(
+          (t) =>
+            t &&
+            !String(t.id || '').startsWith('task-rem-') &&
+            !String(t.id || '').startsWith('task-comp-')
+        )
+      : [];
+    return {
+      ...p,
+      team: mergedTeam,
+      tasks: cleanTasks,
+      totalTasks: cleanTasks.length,
+      completedTasks: cleanTasks.filter((t) => t.completed).length,
+    };
+  };
+
   // Projects state
   const [projects, setProjects] = useState<Project[]>(() => {
     try {
@@ -75,25 +100,7 @@ export const ProjectsView: React.FC = () => {
       if (saved !== null) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed.map((p) => {
-            if (!p || typeof p !== 'object') return p;
-            const initP = INITIAL_PROJECTS.find((ip) => ip.id === p.id);
-            const mergedTeam = Array.from(
-              new Set([
-                ...(Array.isArray(p.team) ? p.team : []),
-                ...(initP?.team || []),
-                p.projectManager || 'Sayed (CEO)',
-              ])
-            );
-            const tasks = Array.isArray(p.tasks) && p.tasks.length > 0
-              ? p.tasks
-              : (initP?.tasks || []);
-            return {
-              ...p,
-              team: mergedTeam,
-              tasks,
-            };
-          });
+          return parsed.map(sanitizeProject);
         }
       }
       return INITIAL_PROJECTS;
@@ -108,7 +115,7 @@ export const ProjectsView: React.FC = () => {
         const saved = localStorage.getItem('ozostack_projects');
         if (saved !== null) {
           const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed)) setProjects(parsed);
+          if (Array.isArray(parsed)) setProjects(parsed.map(sanitizeProject));
         }
       } catch {
         /* ignore */
@@ -124,7 +131,7 @@ export const ProjectsView: React.FC = () => {
     [projects, scopeFilter]
   );
 
-  // Project Activity Log state (persisted in localStorage)
+  // Project Activity Log state (persisted in localStorage, clean empty fallback — no mock logs)
   const [projectActivities, setProjectActivities] = useState<ProjectActivity[]>(() => {
     try {
       const saved = localStorage.getItem('ozostack_project_activities');
@@ -134,9 +141,9 @@ export const ProjectsView: React.FC = () => {
           return parsed;
         }
       }
-      return INITIAL_PROJECT_ACTIVITIES;
+      return [];
     } catch {
-      return INITIAL_PROJECT_ACTIVITIES;
+      return [];
     }
   });
 
@@ -160,7 +167,7 @@ export const ProjectsView: React.FC = () => {
         minute: '2-digit',
         hour12: true,
       }),
-      author: 'Sayed (CEO)',
+      author: currentUser?.name || 'Admin',
       oldValue,
       newValue,
     };
@@ -418,6 +425,7 @@ export const ProjectsView: React.FC = () => {
         }
         return next;
       });
+      window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
       if (selectedDrawerProject?.id === project.id) {
         setSelectedDrawerProject(project);
       }
@@ -453,7 +461,7 @@ export const ProjectsView: React.FC = () => {
           logProjectActivity(
             project.id,
             'note',
-            `Project details & metadata updated by Sayed (CEO)`
+            `Project details & metadata updated by ${currentUser?.name || 'Admin'}`
           );
         }
       }
@@ -467,6 +475,7 @@ export const ProjectsView: React.FC = () => {
         }
         return next;
       });
+      window.dispatchEvent(new CustomEvent('ozostack-crm-config-changed'));
       showToast(`New project "${project.name}" launched.`);
       logProjectActivity(
         project.id,
