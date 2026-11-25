@@ -11,203 +11,9 @@ const norm = (str?: string | null): string =>
     .trim()
     .toLowerCase();
 
-export const DEFAULT_TODOS: PersonalTodo[] = [
-  // Neha Sharma
-  {
-    id: 'todo-ns-1',
-    ownerName: 'Neha Sharma',
-    title: 'Review QA regression checklist for Sprint 14',
-    completed: false,
-    priority: 'High',
-    dueDate: '2025-05-20',
-    category: 'Work',
-    notes: 'Verify checkout cart calculation and webhook idempotency.',
-    createdAt: '2025-05-19T09:00:00.000Z',
-  },
-  {
-    id: 'todo-ns-2',
-    ownerName: 'Neha Sharma',
-    title: 'Draft customer follow-up notes for SwiftRetail demo',
-    completed: false,
-    priority: 'Medium',
-    dueDate: '2025-05-20',
-    category: 'Meeting Prep',
-    notes: 'Highlight sub-second inventory synchronization feature.',
-    createdAt: '2025-05-19T11:30:00.000Z',
-  },
-  {
-    id: 'todo-ns-3',
-    ownerName: 'Neha Sharma',
-    title: 'Submit weekly sprint velocity report to project manager',
-    completed: true,
-    priority: 'High',
-    dueDate: '2025-05-19',
-    category: 'Urgent',
-    notes: 'Submitted via project dashboard.',
-    createdAt: '2025-05-18T14:00:00.000Z',
-    completedAt: '2025-05-19T17:15:00.000Z',
-  },
-  {
-    id: 'todo-ns-4',
-    ownerName: 'Neha Sharma',
-    title: 'Check API rate-limiting response latency report',
-    completed: false,
-    priority: 'Low',
-    dueDate: '2025-05-22',
-    category: 'Review',
-    createdAt: '2025-05-20T08:00:00.000Z',
-  },
-
-  // Sayed
-  {
-    id: 'todo-sy-1',
-    ownerName: 'Sayed',
-    title: 'Review quarterly revenue forecast with finance manager',
-    completed: false,
-    priority: 'High',
-    dueDate: '2025-05-20',
-    category: 'Review',
-    notes: 'Focus on enterprise recurring revenue expansion.',
-    createdAt: '2025-05-19T08:30:00.000Z',
-  },
-  {
-    id: 'todo-sy-2',
-    ownerName: 'Sayed',
-    title: 'Finalize enterprise contract addendum for Apex Global',
-    completed: false,
-    priority: 'High',
-    dueDate: '2025-05-20',
-    category: 'Urgent',
-    notes: 'Confirm SLA guarantees and custom support tier.',
-    createdAt: '2025-05-19T10:00:00.000Z',
-  },
-  {
-    id: 'todo-sy-3',
-    ownerName: 'Sayed',
-    title: 'One-on-one sync with engineering department lead',
-    completed: true,
-    priority: 'Medium',
-    dueDate: '2025-05-19',
-    category: 'Meeting Prep',
-    createdAt: '2025-05-18T15:00:00.000Z',
-    completedAt: '2025-05-19T16:00:00.000Z',
-  },
-
-  // Amit Kumar
-  {
-    id: 'todo-ak-1',
-    ownerName: 'Amit Kumar',
-    title: 'Verify Redis failover sentinel latency in staging cluster',
-    completed: false,
-    priority: 'High',
-    dueDate: '2025-05-20',
-    category: 'Work',
-    createdAt: '2025-05-19T09:15:00.000Z',
-  },
-  {
-    id: 'todo-ak-2',
-    ownerName: 'Amit Kumar',
-    title: 'Prepare cloud architecture slides for client discovery call',
-    completed: false,
-    priority: 'High',
-    dueDate: '2025-05-20',
-    category: 'Meeting Prep',
-    createdAt: '2025-05-19T12:00:00.000Z',
-  },
-];
-
-export const DEFAULT_NOTES: PersonalNote[] = [
-  // Neha Sharma
-  {
-    id: 'note-ns-1',
-    ownerName: 'Neha Sharma',
-    title: 'Sprint 14 QA Focus & Test Matrix',
-    content: `Key focus items for upcoming release:
-• Verify multi-currency conversion on shopping cart totals
-• Ensure Stripe webhook idempotency keys are properly stored in Redis
-• Test 256-bit SSL public lead form validation on mobile browsers
-• Run Playwright end-to-end regression test suite`,
-    pinned: true,
-    colorTag: 'sky',
-    tags: ['QA', 'Testing', 'Sprint 14'],
-    createdAt: '2025-05-18T10:00:00.000Z',
-    updatedAt: '2025-05-20T08:30:00.000Z',
-  },
-  {
-    id: 'note-ns-2',
-    ownerName: 'Neha Sharma',
-    title: 'SwiftRetail Demo Agenda & Requirements',
-    content: `Client expectations from today's demo:
-1. Sub-second POS inventory sync
-2. Automated WhatsApp purchase receipts
-3. Role-based employee access control
-4. Custom export of daily ledger`,
-    pinned: false,
-    colorTag: 'emerald',
-    tags: ['Demo', 'SwiftRetail', 'Clients'],
-    createdAt: '2025-05-19T11:00:00.000Z',
-    updatedAt: '2025-05-19T15:20:00.000Z',
-  },
-  {
-    id: 'note-ns-3',
-    ownerName: 'Neha Sharma',
-    title: 'Ideas & Automation Improvements',
-    content: `Investigate automated Playwright visual regression runs in GitHub Actions.
-Check Web Audio API synthesizer for clean notification chimes.`,
-    pinned: false,
-    colorTag: 'amber',
-    tags: ['Ideas', 'Personal'],
-    createdAt: '2025-05-17T16:00:00.000Z',
-    updatedAt: '2025-05-18T12:10:00.000Z',
-  },
-
-  // Sayed
-  {
-    id: 'note-sy-1',
-    ownerName: 'Sayed',
-    title: 'Executive Product Strategy 2025',
-    content: `Core Growth Pillars:
-1. Web-to-Lead dynamic embed generator with direct CRM sync
-2. High-converting cold outreach templates for Email & WhatsApp
-3. Role-based notification privacy: staff members only see their own tasks and meetings
-4. Enterprise compliance and fine-grained data auditing`,
-    pinned: true,
-    colorTag: 'purple',
-    tags: ['Strategy', 'Executive', 'Roadmap'],
-    createdAt: '2025-05-16T09:00:00.000Z',
-    updatedAt: '2025-05-20T09:00:00.000Z',
-  },
-  {
-    id: 'note-sy-2',
-    ownerName: 'Sayed',
-    title: 'Investor & Board Meeting Talking Points',
-    content: `Key Q2 metrics:
-• 34% increase in inbound lead pipeline
-• SaaS gross profit margin steady at 82%
-• New customer retention rate reached 96.4%`,
-    pinned: false,
-    colorTag: 'sky',
-    tags: ['Board', 'Finance'],
-    createdAt: '2025-05-18T14:30:00.000Z',
-    updatedAt: '2025-05-19T16:45:00.000Z',
-  },
-
-  // Amit Kumar
-  {
-    id: 'note-ak-1',
-    ownerName: 'Amit Kumar',
-    title: 'Cloud Architecture & Multi-Region VPC Peering',
-    content: `Design notes:
-• Cross-region active-active failover latency requirement < 35ms
-• Route 53 latency routing with automatic health check failover
-• Redis cache cluster replication factor: 3 read replicas`,
-    pinned: true,
-    colorTag: 'sky',
-    tags: ['AWS', 'Architecture', 'DevOps'],
-    createdAt: '2025-05-17T13:00:00.000Z',
-    updatedAt: '2025-05-19T10:15:00.000Z',
-  },
-];
+// Clean empty defaults — no old 2025 mock data seeded for staff workspaces
+export const DEFAULT_TODOS: PersonalTodo[] = [];
+export const DEFAULT_NOTES: PersonalNote[] = [];
 
 export function loadAllTodos(): PersonalTodo[] {
   try {
@@ -219,7 +25,7 @@ export function loadAllTodos(): PersonalTodo[] {
   } catch {
     /* fallback */
   }
-  return DEFAULT_TODOS;
+  return [];
 }
 
 export function saveAllTodos(todos: PersonalTodo[]): void {
@@ -241,7 +47,7 @@ export function loadAllNotes(): PersonalNote[] {
   } catch {
     /* fallback */
   }
-  return DEFAULT_NOTES;
+  return [];
 }
 
 export function saveAllNotes(notes: PersonalNote[]): void {
@@ -253,14 +59,28 @@ export function saveAllNotes(notes: PersonalNote[]): void {
   }
 }
 
+function belongsToCurrentUser(
+  item: { ownerId?: string; ownerName?: string },
+  userId?: string,
+  userName?: string
+): boolean {
+  if (!userId && !userName) return false;
+  if (item.ownerId) {
+    return Boolean(userId && item.ownerId === userId);
+  }
+  return Boolean(userName && norm(item.ownerName) === norm(userName));
+}
+
 /**
  * Hook providing strictly scoped personal workspace for the authenticated staff member.
+ * Even Super Admins ONLY see their own personal to-dos and notes — never other staff members' items.
  */
 export function usePersonalWorkspace(user?: { name?: string; id?: string } | null) {
   const [allTodos, setAllTodos] = useState<PersonalTodo[]>(() => loadAllTodos());
   const [allNotes, setAllNotes] = useState<PersonalNote[]>(() => loadAllNotes());
 
-  const currentUserName = user?.name || 'Sayed';
+  const currentUserId = user?.id || '';
+  const currentUserName = user?.name || '';
 
   const refresh = useCallback(() => {
     setAllTodos(loadAllTodos());
@@ -287,25 +107,24 @@ export function usePersonalWorkspace(user?: { name?: string; id?: string } | nul
     };
   }, [refresh]);
 
-  // Strict personal scoping: staff members ONLY see their own items
+  // Strict per-user isolation: every staff member (including Super Admin) ONLY sees their own items
   const userTodos = useMemo(() => {
-    const myName = norm(currentUserName);
-    return allTodos.filter((t) => norm(t.ownerName) === myName);
-  }, [allTodos, currentUserName]);
+    return allTodos.filter((t) => belongsToCurrentUser(t, currentUserId, currentUserName));
+  }, [allTodos, currentUserId, currentUserName]);
 
   const userNotes = useMemo(() => {
-    const myName = norm(currentUserName);
     return allNotes
-      .filter((n) => norm(n.ownerName) === myName)
+      .filter((n) => belongsToCurrentUser(n, currentUserId, currentUserName))
       .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
-  }, [allNotes, currentUserName]);
+  }, [allNotes, currentUserId, currentUserName]);
 
   // CRUD for To-Dos
   const addTodo = useCallback(
-    (item: Omit<PersonalTodo, 'id' | 'createdAt' | 'ownerName'>) => {
+    (item: Omit<PersonalTodo, 'id' | 'createdAt' | 'ownerName' | 'ownerId'>) => {
       const newTodo: PersonalTodo = {
         ...item,
         id: `todo-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        ownerId: currentUserId || undefined,
         ownerName: currentUserName,
         createdAt: new Date().toISOString(),
       };
@@ -313,42 +132,58 @@ export function usePersonalWorkspace(user?: { name?: string; id?: string } | nul
       saveAllTodos(updated);
       return newTodo;
     },
-    [currentUserName]
+    [currentUserId, currentUserName]
   );
 
-  const updateTodo = useCallback((updatedTodo: PersonalTodo) => {
-    const current = loadAllTodos();
-    const updated = current.map((t) => (t.id === updatedTodo.id ? updatedTodo : t));
-    saveAllTodos(updated);
-  }, []);
+  const updateTodo = useCallback(
+    (updatedTodo: PersonalTodo) => {
+      const current = loadAllTodos();
+      const updated = current.map((t) =>
+        t.id === updatedTodo.id && belongsToCurrentUser(t, currentUserId, currentUserName)
+          ? { ...updatedTodo, ownerId: currentUserId || t.ownerId, ownerName: currentUserName || t.ownerName }
+          : t
+      );
+      saveAllTodos(updated);
+    },
+    [currentUserId, currentUserName]
+  );
 
-  const toggleTodo = useCallback((id: string) => {
-    const current = loadAllTodos();
-    const updated = current.map((t) => {
-      if (t.id !== id) return t;
-      const completed = !t.completed;
-      return {
-        ...t,
-        completed,
-        completedAt: completed ? new Date().toISOString() : undefined,
-      };
-    });
-    saveAllTodos(updated);
-  }, []);
+  const toggleTodo = useCallback(
+    (id: string) => {
+      const current = loadAllTodos();
+      const updated = current.map((t) => {
+        if (t.id !== id || !belongsToCurrentUser(t, currentUserId, currentUserName)) return t;
+        const completed = !t.completed;
+        return {
+          ...t,
+          completed,
+          completedAt: completed ? new Date().toISOString() : undefined,
+        };
+      });
+      saveAllTodos(updated);
+    },
+    [currentUserId, currentUserName]
+  );
 
-  const deleteTodo = useCallback((id: string) => {
-    const current = loadAllTodos();
-    const updated = current.filter((t) => t.id !== id);
-    saveAllTodos(updated);
-  }, []);
+  const deleteTodo = useCallback(
+    (id: string) => {
+      const current = loadAllTodos();
+      const updated = current.filter(
+        (t) => !(t.id === id && belongsToCurrentUser(t, currentUserId, currentUserName))
+      );
+      saveAllTodos(updated);
+    },
+    [currentUserId, currentUserName]
+  );
 
   // CRUD for Notes
   const addNote = useCallback(
-    (item: Omit<PersonalNote, 'id' | 'createdAt' | 'updatedAt' | 'ownerName'>) => {
+    (item: Omit<PersonalNote, 'id' | 'createdAt' | 'updatedAt' | 'ownerName' | 'ownerId'>) => {
       const now = new Date().toISOString();
       const newNote: PersonalNote = {
         ...item,
         id: `note-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        ownerId: currentUserId || undefined,
         ownerName: currentUserName,
         createdAt: now,
         updatedAt: now,
@@ -357,29 +192,51 @@ export function usePersonalWorkspace(user?: { name?: string; id?: string } | nul
       saveAllNotes(updated);
       return newNote;
     },
-    [currentUserName]
+    [currentUserId, currentUserName]
   );
 
-  const updateNote = useCallback((updatedNote: PersonalNote) => {
-    const now = new Date().toISOString();
-    const current = loadAllNotes();
-    const updated = current.map((n) =>
-      n.id === updatedNote.id ? { ...updatedNote, updatedAt: now } : n
-    );
-    saveAllNotes(updated);
-  }, []);
+  const updateNote = useCallback(
+    (updatedNote: PersonalNote) => {
+      const now = new Date().toISOString();
+      const current = loadAllNotes();
+      const updated = current.map((n) =>
+        n.id === updatedNote.id && belongsToCurrentUser(n, currentUserId, currentUserName)
+          ? {
+              ...updatedNote,
+              ownerId: currentUserId || n.ownerId,
+              ownerName: currentUserName || n.ownerName,
+              updatedAt: now,
+            }
+          : n
+      );
+      saveAllNotes(updated);
+    },
+    [currentUserId, currentUserName]
+  );
 
-  const togglePinNote = useCallback((id: string) => {
-    const current = loadAllNotes();
-    const updated = current.map((n) => (n.id === id ? { ...n, pinned: !n.pinned } : n));
-    saveAllNotes(updated);
-  }, []);
+  const togglePinNote = useCallback(
+    (id: string) => {
+      const current = loadAllNotes();
+      const updated = current.map((n) =>
+        n.id === id && belongsToCurrentUser(n, currentUserId, currentUserName)
+          ? { ...n, pinned: !n.pinned }
+          : n
+      );
+      saveAllNotes(updated);
+    },
+    [currentUserId, currentUserName]
+  );
 
-  const deleteNote = useCallback((id: string) => {
-    const current = loadAllNotes();
-    const updated = current.filter((n) => n.id !== id);
-    saveAllNotes(updated);
-  }, []);
+  const deleteNote = useCallback(
+    (id: string) => {
+      const current = loadAllNotes();
+      const updated = current.filter(
+        (n) => !(n.id === id && belongsToCurrentUser(n, currentUserId, currentUserName))
+      );
+      saveAllNotes(updated);
+    },
+    [currentUserId, currentUserName]
+  );
 
   // KPI calculations
   const kpis = useMemo(() => {

@@ -27,6 +27,7 @@ import { useAuth } from '../../context/AuthContext';
 import {
   usePersonalWorkspace,
 } from '../../data/personalNotesTodosData';
+import { DailyPlannerSection } from './DailyPlannerSection';
 import {
   PersonalTodo,
   PersonalNote,
@@ -114,7 +115,7 @@ const CATEGORIES: TodoCategory[] = [
 
 export const PersonalNotesTodosView: React.FC = () => {
   const { theme } = useTheme();
-  const { currentUser } = useAuth();
+  const { currentUser, impersonator, stopImpersonation } = useAuth();
   const isLight = theme === 'white-sky';
 
   const {
@@ -130,10 +131,10 @@ export const PersonalNotesTodosView: React.FC = () => {
     updateNote,
     togglePinNote,
     deleteNote,
-  } = usePersonalWorkspace(currentUser);
+  } = usePersonalWorkspace(impersonator ? null : currentUser);
 
-  // View state
-  const [activeTab, setActiveTab] = useState<'all' | 'todos' | 'notes'>('all');
+  // View state — default to Daily Planner & Rating
+  const [activeTab, setActiveTab] = useState<'planner' | 'all' | 'todos' | 'notes'>('planner');
   const [todoFilter, setTodoFilter] = useState<'all' | 'active' | 'completed' | 'high'>('all');
   const [todoSearch, setTodoSearch] = useState('');
   const [noteSearch, setNoteSearch] = useState('');
@@ -220,6 +221,32 @@ export const PersonalNotesTodosView: React.FC = () => {
     ? 'bg-white border-sky-100/90 shadow-xs'
     : 'bg-[#0f172a]/95 border-slate-800';
 
+  // Strict privacy guard: even Super Admin impersonating a staff member CANNOT view their private planner, to-dos, or notes
+  if (impersonator) {
+    return (
+      <div className={`p-8 rounded-2xl border text-center max-w-xl mx-auto mt-10 ${cardBg}`}>
+        <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 text-emerald-500 flex items-center justify-center mx-auto mb-3">
+          <Lock className="w-6 h-6" />
+        </div>
+        <h2 className="text-lg font-extrabold">Private Personal Space Locked</h2>
+        <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+          Daily Planner, Daily Ratings, Personal To-Dos, and Private Notes belong strictly to{' '}
+          <span className="font-bold text-slate-700 dark:text-slate-200">
+            {currentUser?.name || 'this staff member'}
+          </span>
+          . Even Super Admins cannot view another staff member’s personal planner or notes.
+        </p>
+        <button
+          type="button"
+          onClick={stopImpersonation}
+          className="mt-5 px-4 py-2 rounded-xl text-xs font-bold bg-sky-500 hover:bg-sky-600 text-white shadow-xs transition-all"
+        >
+          Return to My Own Account ({impersonator.name})
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Toast Notification */}
@@ -233,17 +260,17 @@ export const PersonalNotesTodosView: React.FC = () => {
       {/* Top Header & Private Privacy Badge */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight">
-              To Do & Notes
+              Daily Planner, To Do & Notes
             </h1>
             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-200/50 dark:border-emerald-800/40">
               <Lock className="w-3 h-3" />
-              Private Workspace · {currentUserName}
+              100% Private · {currentUserName || currentUser?.name}
             </span>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Your personal scratchpad, checklists, and daily to-dos. Only visible to you.
+            Your private Daily Planner, daily star rating, AI Goal Coach, to-dos & scratchpad. Strictly visible only to you — not even Super Admin.
           </p>
         </div>
 
@@ -335,7 +362,20 @@ export const PersonalNotesTodosView: React.FC = () => {
       </div>
 
       {/* Main Tabs Navigation */}
-      <div className="flex items-center gap-1.5 p-1 rounded-2xl border border-sky-100 dark:border-slate-800 bg-sky-50/50 dark:bg-slate-900/40 w-fit">
+      <div className="flex items-center gap-1.5 p-1 rounded-2xl border border-sky-100 dark:border-slate-800 bg-sky-50/50 dark:bg-slate-900/40 w-fit flex-wrap">
+        <button
+          type="button"
+          onClick={() => setActiveTab('planner')}
+          className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
+            activeTab === 'planner'
+              ? 'bg-white dark:bg-slate-800 text-sky-600 dark:text-sky-400 shadow-xs'
+              : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+          }`}
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+          <span>Daily Planner & AI Coach</span>
+        </button>
+
         <button
           type="button"
           onClick={() => setActiveTab('all')}
@@ -346,7 +386,7 @@ export const PersonalNotesTodosView: React.FC = () => {
           }`}
         >
           <Columns className="w-3.5 h-3.5" />
-          <span>All-in-One Split View</span>
+          <span>To-Do & Notes Split</span>
         </button>
 
         <button
@@ -376,7 +416,16 @@ export const PersonalNotesTodosView: React.FC = () => {
         </button>
       </div>
 
+      {/* Daily Planner & AI Coach Tab */}
+      {activeTab === 'planner' && (
+        <DailyPlannerSection
+          onNotify={showToast}
+          pendingGeneralTodos={todos.filter((t) => !t.completed)}
+        />
+      )}
+
       {/* Content Area */}
+      {activeTab !== 'planner' && (
       <div
         className={
           activeTab === 'all'
@@ -809,6 +858,7 @@ export const PersonalNotesTodosView: React.FC = () => {
           </div>
         )}
       </div>
+      )}
 
       {/* TO-DO CREATE/EDIT MODAL */}
       {isTodoModalOpen && (

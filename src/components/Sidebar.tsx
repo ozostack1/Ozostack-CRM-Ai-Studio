@@ -49,7 +49,7 @@ import {
   INITIAL_FOLLOW_UPS,
   INITIAL_DOCUMENTS,
 } from '../data/mockData';
-import { DEFAULT_TODOS } from '../data/personalNotesTodosData';
+import { getTodayPendingPlannerCount } from '../data/dailyPlannerService';
 
 interface NavItem {
   id: string;
@@ -154,7 +154,7 @@ export const Sidebar: React.FC = () => {
   } = useTheme();
 
   const isLight = theme === 'white-sky';
-  const { can, logout, scopeFilter, currentUser } = useAuth();
+  const { can, logout, scopeFilter, currentUser, impersonator } = useAuth();
 
   const [storeTick, setStoreTick] = useState(0);
   useEffect(() => {
@@ -200,17 +200,23 @@ export const Sidebar: React.FC = () => {
       .replace(/\s*\([^)]*\)/g, '')
       .trim()
       .toLowerCase();
-    const personalTodos = readLS<{ ownerName?: string; completed?: boolean }>(
+    const myId = currentUser?.id || '';
+    const personalTodos = readLS<{ ownerId?: string; ownerName?: string; completed?: boolean }>(
       'ozostack_personal_todos_v1',
-      DEFAULT_TODOS
+      []
     );
-    const pendingPersonalTodosCount = personalTodos.filter(
-      (t) =>
-        (t.ownerName || '')
-          .replace(/\s*\([^)]*\)/g, '')
-          .trim()
-          .toLowerCase() === myName && !t.completed
-    ).length;
+    const pendingPersonalTodosCount = impersonator
+      ? 0
+      : personalTodos.filter((t) => {
+          if (t.completed) return false;
+          if (t.ownerId) return Boolean(myId && t.ownerId === myId);
+          return (
+            (t.ownerName || '')
+              .replace(/\s*\([^)]*\)/g, '')
+              .trim()
+              .toLowerCase() === myName
+          );
+        }).length + getTodayPendingPlannerCount(myId);
 
     return {
       Leads: scopeFilter(leads, (l) => ({ owner: l.owner })).length,
@@ -237,7 +243,7 @@ export const Sidebar: React.FC = () => {
       ).reduce((sum, c) => sum + (c.unreadCount || 0), 0),
       Templates: readLS<{ id: string }>('ozostack_outreach_templates_v1', []).length || 9,
     };
-  }, [scopeFilter, currentUser, activeNav, storeTick]);
+  }, [scopeFilter, currentUser, impersonator, activeNav, storeTick]);
 
   // Only show modules the signed-in user's role grants access to, with scoped badge counts
   const visibleSections = NAV_SECTIONS.map((sec) => ({
